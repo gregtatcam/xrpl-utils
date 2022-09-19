@@ -1022,12 +1022,15 @@ def amm_create(line):
     global accounts
     global verbose
     rx = Re()
-    if rx.search(r'^\s*amm\s+create(\s+@([^\s]+))?\s+([^\s]+)\s+(.+)$', line):
-        account = rx.match[3]
-        rest = rx.match[4]
-        alias = None
-        if rx.match[1] is not None:
-            alias = rx.match[2]
+    if rx.search(r'^\s*amm\s+create\s+([^\s]+)\s+(([^\s]+)\s+(.+))$', line):
+        if getAccountId(rx.match[3]) is not None:
+            alias = rx.match[1]
+            account = rx.match[3]
+            rest = rx.match[4]
+        else:
+            account = rx.match[1]
+            rest = rx.match[2]
+            alias = None
         if not getAccountId(account):
             print(account, 'account not found')
             return None
@@ -1665,7 +1668,7 @@ def expect_amm(line):
         return True
     # expect amm hash account lptoken | expect amm token1 token2 lptoken?
     elif rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+([^\s]+)\s+(\d+(\.\d+)?)?\s*$', line):
-        if isAddress(rx.match[2]):
+        if getAccountId(rx.match[2]) is not None:
             hash = getAMMHash(rx.match[1])
             if hash == rx.match[1]:
                 print(rx.match[1], 'hash not found')
