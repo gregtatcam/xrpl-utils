@@ -1618,10 +1618,10 @@ def amm_hash(line):
     return False
 
 # expect amm hash none
-# expect amm account #hash lptoken
+# expect amm hash account lptoken
 # expect amm token1 token2 [lptoken]
 def expect_amm(line):
-    def proc(account_id, token1, token2, token):
+    def proc(token1, token2, token):
         amToken1 = Amount.fromStr(token1)
         if amToken1 is None:
             print('invalid amount', token1)
@@ -1633,7 +1633,7 @@ def expect_amm(line):
         lpToken = None
         if token is not None:
             lpToken = token
-        request = amm_info_request(account_id, amToken1.issue, amToken2.issue, 'validated')
+        request = amm_info_request(None, amToken1.issue, amToken2.issue, 'validated')
         res = send_request(request, node, port)
         if 'error' in res['result']:
             raise Exception(f'{line.rstrip()}: {res["result"]["error"]}')
@@ -1663,24 +1663,28 @@ def expect_amm(line):
         if res['result']['error'] != 'actNotFound':
             raise Exception(f'{line.rstrip()}: ##FAILED## {res}')
         return True
-    elif rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+@([^\s]+)\s+(\d+(\.\d+)?)\s*$', line):
-        account = rx.match[1]
-        account_id = getAccountId(account)
-        if account_id is None:
-            print(account, 'account not found')
-            return None
-        hash = getAMMHash(rx.match[2])
-        if hash == rx.match[2]:
-            print(rx.match[2], 'hash not found')
-            return None
-        tokens = rx.match[3]
-        request = amm_info_by_hash_request(account_id, hash)
-        res = send_request(request, node, port)
-        if tokens != res['result']['LPToken']['value']:
-            raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
-        return True
-    elif rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+([^\s]+)(\s+([^\s]+))?\s*$', line):
-        proc(None, rx.match[1], rx.match[2], rx.match[4])
+    # expect amm hash account lptoken | expect amm token1 token2 lptoken?
+    elif rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+([^\s]+)\s+(\d+(\.\d+)?)?\s*$', line):
+        if isAddress(rx.match[2]):
+            hash = getAMMHash(rx.match[1])
+            if hash == rx.match[1]:
+                print(rx.match[1], 'hash not found')
+                return None
+            account = rx.match[2]
+            account_id = getAccountId(account)
+            if account_id is None:
+                print(account, 'account not found')
+                return None
+            tokens = rx.match[3]
+            if tokens is None:
+                print('tokens must be specified')
+                return None
+            request = amm_info_by_hash_request(account_id, hash)
+            res = send_request(request, node, port)
+            if tokens != res['result']['LPToken']['value']:
+                raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
+        else:
+            proc(rx.match[1], rx.match[2], rx.match[4])
         return True
     return False
 
