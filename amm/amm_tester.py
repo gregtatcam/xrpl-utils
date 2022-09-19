@@ -13,6 +13,9 @@ port = 5005
 node = '127.0.0.1'
 fund = False
 script = None
+store = {}
+tx_wait = 0.1
+tx_wait_save = tx_wait
 i = 1
 while i < len(sys.argv):
     if sys.argv[i] == '--node':
@@ -57,12 +60,33 @@ try:
 except:
     pass
 
+def save_wait():
+    global tx_wait
+    global tx_wait_save
+    tx_wait_save = tx_wait
+    tx_wait = 0.1
+
+def restore_wait(do_wait = True):
+    global tx_wait
+    global tx_wait_save
+    tx_wait = tx_wait_save
+    if do_wait:
+        time.sleep(tx_wait)
+
 class Re:
     def __init__(self):
         self.match = None
     def search(self, rx, s):
         self.match = re.search(rx, s)
         return self.match is not None
+
+def get_store(v, totype: type = None):
+    rx = Re()
+    if rx.search(r'^\$([^\s]+)$', v):
+        return store[rx.match[1]]
+    if type is not None:
+        return totype(v)
+    return v
 
 def error(res):
     if 'result' in res and 'engine_result' in res['result']:
@@ -118,6 +142,7 @@ def getPaths(paths):
     pathsa = []
     if paths is None:
         return None
+    rx = Re()
     for path in paths.split('],['):
         ps = []
         for cur in path.strip('[]').split(','):
@@ -125,6 +150,9 @@ def getPaths(paths):
                 ps.append({"currency": cur, "issuer": "rrrrrrrrrrrrrrrrrrrrrhoLvTp"})
             elif cur in issuers:
                 ps.append({"currency": cur, "issuer": getAccountId(issuers[cur])})
+            elif rx.search(r'^\$([^\s]+)$', cur):
+                issue = getAMMIssue(rx.match[1])
+                ps.append({"currency":issue.currency, "issuer":issue.issuer})
             else:
                 return []
         pathsa.append(ps)
@@ -163,10 +191,17 @@ class Issue:
         return self.currency == 'XRP'
     def isDrops(self):
         return self.drops
-    # XRP|IOU
+    # XRP|IOU|$AMM
     def nextFromStr(s, with_issuer = False):
         rx = Re()
-        if rx.search(r'^\s*([^\s]+)(.*)$', s):
+        # AMM issue
+        if rx.search(r'^\s*\$([^\s]+)(.*)', s):
+            hash = getAMMHash(rx.match[1])
+            if hash is None:
+                print(rx.match[1], 'hash not found')
+                return (None, s)
+            return (getAMMIssue(rx.match[1]), rx.match[2])
+        elif rx.search(r'^\s*([^\s]+)(.*)$', s):
             currency = rx.match[1].upper()
             rest = rx.match[2]
             if currency == 'XRP' or currency == 'XRPD':
@@ -190,6 +225,8 @@ class Issue:
         return self.currency == other.currency and self.issuer == other.issuer
     def __ne__(self, other):
         return not (self == other)
+    def toStr(self):
+        return f'{self.currency}/{self.issuer}'
 
 class Amount:
     def __init__(self, issue: Issue, value : float):
@@ -235,11 +272,35 @@ class Amount:
             return amt
         return None
     def toStr(self):
-        return f'{self.value}{self.issue.currency}'
+        return f'{self.value}/{self.issue.currency}'
     def __eq__(self, other):
         return self.issue == other.issue and self.value == other.value
     def __ne__(self, other):
         return not (self == other)
+    def __add__(self, other):
+        if type(other) == Amount:
+            if self.issue != other.issue:
+                raise Exception('can not add, amounts have different Issue')
+            return Amount(self.issue, self.value + other.value)
+        if type(other) == int or type(other) == float:
+            return Amount(self.issue, self.value + other)
+        raise Exception('can not add amounts')
+    def __sub__(self, other):
+        if type(other) == Amount:
+            if self.issue != other.issue:
+                raise Exception('can not subtract, amounts have different Issue')
+            return Amount(self.issue, self.value - other.value)
+        if type(other) == int or type(other) == float:
+            return Amount(self.issue, self.value - other)
+        raise Exception('can not add amounts')
+    def __mul__(self, other):
+        if type(other) == Amount:
+            if self.issue != other.issue:
+                raise Exception('can not multiply, amounts have different Issue')
+            return Amount(self.issue, self.value * other.value)
+        if type(other) == int or type(other) == float:
+            return Amount(self.issue, self.value * other)
+        raise Exception('can not multiply amounts')
 
 def send_request(request, node = None, port = '5005'):
     if node == None:
@@ -256,6 +317,12 @@ def send_request(request, node = None, port = '5005'):
 
     if res.status_code != 200:
         raise Exception(res.text)
+    j = json.loads(request)
+    if 'method' in j and j['method'] == 'submit':
+        if j['params'][0]['tx_json']['TransactionType'] == 'AMMInstanceCreate':
+            time.sleep(6)
+        else:
+            time.sleep(tx_wait)
     j = json.loads(res.text)
     return j
 
@@ -774,8 +841,14 @@ def faucet_fund(line):
     if rx.search(r'^\s*fund\s+([^\s]+)\s+(\d+)\s*XRP\s*$', line):
         names = rx.match[1]
         amount = int(rx.match[2])
-        for name in names.split(','):
-            faucet_fund1(name, amount)
+        save_wait()
+        try:
+            for name in names.split(','):
+                faucet_fund1(name, amount)
+        except Exception as ex:
+            raise ex
+        finally:
+            restore_wait()
         with open('accounts.json', 'w') as f:
             json.dump(accounts, f)
         return True
@@ -790,23 +863,28 @@ def fund(line):
     if rx.search(r'^\s*fund\s+([^\s]+)\s+(\d+)\s*XRP\s*$', line):
         names = rx.match[1]
         amount = int(rx.match[2])
-        for name in names.split(','):
-            res = send_request(wallet_request(), node, port)
-            id = res['result']['account_id']
-            seed = res['result']['master_seed']
-            accounts[name] = {'id': id, 'seed': seed}
-            payment = payment_request(genesis_sec,
-                                      genesis_acct,
-                                      id,
-                                      Amount(Issue('XRP', None), amount),
-                                      flags='0')
-            res = send_request(payment, node, port)
-            if error(res):
-                return None
-            set = accountset_request(seed, id, 'SetFlag', "8")
-            res = send_request(set, node, port)
-            error(res)
-            time.sleep(0.25)
+        save_wait()
+        try:
+            for name in names.split(','):
+                res = send_request(wallet_request(), node, port)
+                id = res['result']['account_id']
+                seed = res['result']['master_seed']
+                accounts[name] = {'id': id, 'seed': seed}
+                payment = payment_request(genesis_sec,
+                                          genesis_acct,
+                                          id,
+                                          Amount(Issue('XRP', None), amount),
+                                          flags='0')
+                res = send_request(payment, node, port)
+                if error(res):
+                    return None
+                set = accountset_request(seed, id, 'SetFlag', "8")
+                res = send_request(set, node, port)
+                error(res)
+        except Exception as ex:
+            raise ex
+        finally:
+            restore_wait()
         with open('accounts.json', 'w') as f:
             json.dump(accounts, f)
         return True
@@ -822,20 +900,25 @@ def trust_set(line):
         amount = Amount.fromStr(rest, True)
         if amount is None:
             print('invalid amount')
-            return
-        for account in accts.split(','):
-            if not account in accounts:
-                print(account, 'account not found')
-            else:
-                request = trust_request(accounts[account]['seed'],
-                                        accounts[account]['id'],
-                                        amount)
-                res = send_request(request, node, port)
-                if not error(res):
-                    issuers[amount.issue.currency] = getAlias(amount.issue.issuer)
-                    with open('issuers.json', 'w') as f:
-                        json.dump(issuers, f)
-                time.sleep(0.25)
+            return None
+        save_wait()
+        try:
+            for account in accts.split(','):
+                if not account in accounts:
+                    print(account, 'account not found')
+                else:
+                    request = trust_request(accounts[account]['seed'],
+                                            accounts[account]['id'],
+                                            amount)
+                    res = send_request(request, node, port)
+                    if not error(res):
+                        issuers[amount.issue.currency] = getAlias(amount.issue.issuer)
+        except Exception as ex:
+            raise ex
+        finally:
+            restore_wait()
+        with open('issuers.json', 'w') as f:
+            json.dump(issuers, f)
         return True
     return False
 
@@ -914,33 +997,37 @@ def pay(line):
                     print('invalid sendmax')
                     return None
                 flags = getFlags(rx.match[3], flags)
-            for dst in dsts.split(','):
-                payment = payment_request(accounts[src]['seed'],
-                                          accounts[src]['id'],
-                                          accounts[dst]['id'],
-                                          amt,
-                                          paths=paths,
-                                          sendMax=sendmax,
-                                          flags=flags)
-                res = send_request(payment, node, port)
-                time.sleep(0.25)
-                if error(res):
-                    break
+            save_wait()
+            try:
+                for dst in dsts.split(','):
+                    payment = payment_request(accounts[src]['seed'],
+                                              accounts[src]['id'],
+                                              accounts[dst]['id'],
+                                              amt,
+                                              paths=paths,
+                                              sendMax=sendmax,
+                                              flags=flags)
+                    res = send_request(payment, node, port)
+                    if error(res):
+                        break
+            except Exception as ex:
+                raise ex
+            finally:
+                restore_wait()
         return True
     return False
 
-# amm create account[(amm alias)] amount currency amount currency [trading fee]
+# amm create account [$alias] amount currency amount currency [trading fee]
 def amm_create(line):
     global accounts
     global verbose
     rx = Re()
-    if rx.search(r'^\s*amm\s+create\s+([^\s]+)\s+(.+)$', line):
-        account = rx.match[1]
-        rest = rx.match[2]
+    if rx.search(r'^\s*amm\s+create(\s+@([^\s]+))?\s+([^\s]+)\s+(.+)$', line):
+        account = rx.match[3]
+        rest = rx.match[4]
         alias = None
-        if rx.search(r'^([^\s]+)(\(([^\s]+)\))', account):
-            account = rx.match[1]
-            alias = rx.match[3]
+        if rx.match[1] is not None:
+            alias = rx.match[2]
         if not getAccountId(account):
             print(account, 'account not found')
             return None
@@ -969,7 +1056,6 @@ def amm_create(line):
             if alias is None:
                 alias = f'amm{amt1.issue.currency}-{amt2.issue.currency}'
             verbose = False
-            time.sleep(6)
             request = amm_info_request(None, amt1.issue, amt2.issue, 'validated')
             res = send_request(request, node, port)
             verbose = verboseSave
@@ -1330,7 +1416,6 @@ def do_history(line):
                 return False
             for i in range(start, end+1):
                 print(history[i])
-                time.sleep(2)
                 exec_command(history[i])
         return None
     return False
@@ -1489,7 +1574,6 @@ def amm_vote(line):
         if hash is None:
             print(rx.match[2], 'hash not found')
             return False
-        issue = getAMMIssue(rx.match[2])
         feeVal = int(rx.match[3])
         request = vote_request(accounts[account]['seed'], account_id, hash, feeVal)
         res = send_request(request, node, port)
@@ -1565,7 +1649,8 @@ def expect_amm(line):
             return True
 
         if ne(amToken1) or ne(amToken2) or (lpToken is not None and lpToken != token):
-            raise Exception(f'{line.strip()}: ##FAILED## {asset1.toStr()},{asset2.toStr()}')
+            raise Exception(f'{line.strip()}: ##FAILED## {amToken1.toStr()},{asset1.toStr()},'
+                            f'{amToken2.toStr()},{asset2.toStr()}')
 
     rx = Re()
     if rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+none\s*$', line):
@@ -1618,13 +1703,19 @@ def expect_trading_fee(line):
 # expect line account amount
 def expect_line(line):
     rx = Re()
-    if rx.search(r'\s*expect\s+line\s+([^\s]+)\s+([^\s]+)\s*$', line):
+    if rx.search(r'\s*expect\s+line\s+([^\s]+)\s+(.+)\s*$', line):
         account = rx.match[1]
         account_id = getAccountId(account)
         if account_id is None:
             print(account, 'account not found')
             return None
-        asset = Amount.fromStr(rx.match[2])
+        eamount = rx.match[2]
+        if rx.search(r'^\s*\((.+)\)\s*$', eamount):
+            asset = eval_expect_expr(rx.match[1])
+        elif rx.search(r'^\s*\$([^\s]+)\s*$', eamount):
+            asset = store[rx.match[1]]
+        else:
+            asset = Amount.fromStr(eamount)
         if asset is None:
             print('invalid amount', rx.match[2])
             return None
@@ -1641,7 +1732,7 @@ def expect_line(line):
         return True
     return False
 
-# expect offer account size {takerPays, takerGets}, {takerPays1, takerGets}
+# expect offer account {takerPays, takerGets}, {takerPays1, takerGets}
 def expect_offers(line):
     rx = Re()
     if rx.search(r'^\s*expect\s+offers\s+([^\s]+)(\s+(.+))?\s*$', line):
@@ -1652,6 +1743,7 @@ def expect_offers(line):
             return None
         offers_str = rx.match[3]
         offers = []
+        offers_str_ = ''
         if offers_str is not None and not rx.search(r'^\s+$', offers_str):
             for o in re.split(r'\}\s*,\s*\{', offers_str):
                 o_ = re.sub(r'[\{\}]', '', o)
@@ -1665,18 +1757,19 @@ def expect_offers(line):
                         print('invalid amount', rx.match[2])
                         return None
                     offers.append((takerPays, takerGets))
+                    offers_str_ += f',({takerPays.toStr()},{takerGets.toStr()})'
         size = len(offers)
         request = account_offers_request(account_id)
         res = send_request(request, node, port)
         offers_j = res['result']['offers']
         if len(offers_j) != size:
-            raise Exception(f'{line.rstrip()}: ##FAILED## {offers_j}')
+            raise Exception(f'{line.rstrip()}: ##FAILED## {len(offers_j)},{size},{offers_j}')
         for offer in offers_j:
             takerPays = Amount.fromJson(offer['taker_pays'])
             takerGets = Amount.fromJson(offer['taker_gets'])
             offer1 = [o for o in offers if o == (takerPays, takerGets)]
             if offer1 is None or len(offer1) != 1:
-                raise Exception(f'{line.rstrip()}: ##FAILED## {offers_j}')
+                raise Exception(f'{line.rstrip()}: ##FAILED## {offers_str_} {offers_j}')
         return True
     return False
 
@@ -1690,7 +1783,12 @@ def expect_balance(line):
         if account_id is None:
             print(account, 'account not found')
             return None
-        xrp = Amount.fromStr(rx.match[2])
+        ebalance = rx.match[2]
+        # get from the store
+        if rx.search(r'^\$([^\s]+)$', ebalance):
+            xrp = store[rx.match[1]]
+        else:
+            xrp = Amount.fromStr(ebalance)
         if xrp is None:
             print('invalid amount', rx.match[2])
             return None
@@ -1718,9 +1816,25 @@ def run_script(line):
                 print(h)
                 if h[0] != '#':
                     exec_command(h)
-                    time.sleep(0.25)
         return True
     return False
+
+# var1[+|-|*]var2
+# var1,var2 : number|$store
+def eval_expect_expr(expr):
+    rx = Re()
+    if rx.search(r'^\s*([^\s]+)\s*(\+|\-|\*)\s*([^\s]+)$', expr):
+        var1 = get_store(rx.match[1], float)
+        op = rx.match[2]
+        var2 = get_store(rx.match[3], float)
+        if op == '+':
+            return var1 + var2
+        if op == '-':
+            return var1 - var2
+        if op == '*':
+            return var1 * var2
+    else:
+        return None
 
 # repeat start end+1 cmd
 def repeat_cmd(line):
@@ -1731,12 +1845,11 @@ def repeat_cmd(line):
         cmd_ = rx.match[3]
         cmd__ = cmd_
         for i in range(start, end + 1):
-            if rx.search(r'#(\d+)\s*\*\s*\$i#', cmd_):
+            if rx.search(r'\((\d+)\s*\*\s*\$i\)', cmd_):
                 expr = int(rx.match[1]) * i
-                cmd__ = re.sub(r'#(.+)#', str(expr), cmd_)
+                cmd__ = re.sub(r'\((.+)\)', str(expr), cmd_)
             cmd = re.sub(r'\$i', str(i), cmd__)
             exec_command(cmd)
-            time.sleep(0.25)
         return True
     return False
 
@@ -1762,6 +1875,55 @@ def expect_auction(line):
         return True
     return False
 
+# get account balance and save into store[var]
+# get balance account var
+def get_balance(line):
+    global store
+    rx = Re()
+    if rx.search(r'^\s*get\s+balance\s+([^\s]+)\s+([^\s]+)\s*$', line):
+        account = rx.match[1]
+        account_id = getAccountId(account)
+        if account_id is None:
+            print(account, 'account not found')
+            return None
+        var = rx.match[2]
+        request = account_info_request(account_id)
+        res = send_request(request, node, port)
+        store[var] = Amount.fromStr(f'{res["result"]["account_data"]["Balance"]}XRP')
+        return True
+    return False
+
+# get account line and save into store[var]
+# get line account currency var
+def get_line(line):
+    global store
+    rx = Re()
+    if rx.search(r'^\s*get\s+line\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s*$', line):
+        account = rx.match[1]
+        account_id = getAccountId(account)
+        if account_id is None:
+            print(account, 'account not found')
+            return None
+        issue = Issue.fromStr(rx.match[2])
+        var = rx.match[3]
+        request = account_trust_lines_request(account_id)
+        res = send_request(request, node, port)
+        store[var] = None
+        for l in res['result']['lines']:
+            asset = Amount.fromLineJson(l)
+            if asset.issue.currency == issue.currency:
+                store[var] = asset
+        return True
+    return False
+
+def set_wait(line):
+    global tx_wait
+    rx = Re()
+    if rx.search(r'^\s*set\s+wait\s+([^\s]+)\s*$', line):
+        tx_wait = float(rx.match[1])
+        return True
+    return False
+
 commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_lines, pay, amm_create,
             amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
             help, do_history, clear_history, show_accounts, print_account,
@@ -1769,7 +1931,7 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_line
             set_account, set_issue, offer_cancel, account_set, flags, load_accounts,
             server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
-            expect_auction]
+            expect_auction, get_line, get_balance, set_wait]
 
 def prompt():
     sys.stdout.write('> ')
