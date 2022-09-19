@@ -1017,7 +1017,7 @@ def pay(line):
         return True
     return False
 
-# amm create account [$alias] amount currency amount currency [trading fee]
+# amm create [@alias] account amount currency amount currency [trading fee]
 def amm_create(line):
     global accounts
     global verbose
