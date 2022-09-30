@@ -327,7 +327,7 @@ def send_request(request, node = None, port = '5005'):
     return j
 
 def faucet_send_request(request):
-    res = requests.post('https://ammfaucet.devnet.rippletest.net/account', json=json.loads(request))
+    res = requests.post('https://ammfaucet.devnet.rippletest.net/accounts', json=json.loads(request))
     if res.status_code != 200:
         raise Exception(res.text)
     return json.loads(res.text)
