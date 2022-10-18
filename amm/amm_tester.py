@@ -227,6 +227,20 @@ class Issue:
         return not (self == other)
     def toStr(self):
         return f'{self.currency}/{self.issuer}'
+    def json(self):
+        if self.native():
+            return """
+             {
+                "currency" : "XRP" 
+             }
+             """
+        else:
+            return """
+            {
+                "currency" : "%s",
+                "issuer": "%s"
+            }
+            """ % (self.currency, self.issuer)
 
 class Amount:
     def __init__(self, issue: Issue, value : float):
@@ -526,7 +540,7 @@ def amm_info_request(account, iou1: Issue, iou2: Issue, ledger_index = "validate
        }
    ]
    }
-   """ % (acct(account), Amount.fromIssue(iou1).json(), Amount.fromIssue(iou2).json(), index())
+   """ % (acct(account), iou1.json(), iou2.json(), index())
 
 def amm_info_by_hash_request(account, hash, ledger_index = "validated"):
     def acct(account):
@@ -554,7 +568,7 @@ def amm_info_by_hash_request(account, hash, ledger_index = "validated"):
     """ % (acct(account), hash, index())
 
 '''
-LPToken
+LPTokenOut
 Asset1In
 Asset1In and Asset2In
 Asset1In and LPToken
@@ -571,7 +585,7 @@ def amm_deposit_request(secret, account, hash, tokens: Amount = None, asset1: Am
             if tokens is not None:
                 return """
                 "Asset1In": %s,
-                "LPToken": %s,
+                "LPTokenOut": %s,
             """ % (asset1.json(), tokens.json())
             elif eprice is not None:
                 return """
@@ -581,7 +595,7 @@ def amm_deposit_request(secret, account, hash, tokens: Amount = None, asset1: Am
             else:
                 return f'"Asset1In": {asset1.json()},'
         elif tokens is not None:
-            return f'"LPToken": {tokens.json()},'
+            return f'"LPTokenOut": {tokens.json()},'
     return """
     {
     "method": "submit",
@@ -602,7 +616,7 @@ def amm_deposit_request(secret, account, hash, tokens: Amount = None, asset1: Am
     """ % (secret, account, hash, fee, fields())
 
 '''
-LPToken
+LPTokenIn
 Asset1Out
 Asset1Out and Asset2Out
 Asset1Out and LPToken
@@ -626,7 +640,7 @@ def amm_withdraw_request(secret, account, hash, tokens: Amount = None, asset1: A
                         """ % (asset1.json())
                 return """
                     "Asset1Out": %s,
-                    "LPToken": %s,
+                    "LPTokenIn": %s,
                     """ % (asset1.json(), tokens.json())
             if eprice is not None:
                 return """
@@ -639,7 +653,7 @@ def amm_withdraw_request(secret, account, hash, tokens: Amount = None, asset1: A
             if tokens.value == 0.0:
                 flags = 65536
                 return ""
-            return f'"LPToken": {tokens.json()},'
+            return f'"LPTokenIn": {tokens.json()},'
     return """
     {
     "method": "submit",
@@ -1017,7 +1031,7 @@ def pay(line):
         return True
     return False
 
-# amm create [@alias] account amount currency amount currency [trading fee]
+# amm create [@alias] account currency currency [trading fee]
 def amm_create(line):
     global accounts
     global verbose
