@@ -231,7 +231,7 @@ class Issue:
         if self.native():
             return """
              {
-                "currency" : "XRP" 
+                "currency" : "XRP"
              }
              """
         else:
@@ -333,7 +333,7 @@ def send_request(request, node = None, port = '5005'):
         raise Exception(res.text)
     j = json.loads(request)
     if 'method' in j and j['method'] == 'submit':
-        if j['params'][0]['tx_json']['TransactionType'] == 'AMMInstanceCreate':
+        if j['params'][0]['tx_json']['TransactionType'] == 'AMMCreate':
             time.sleep(6)
         else:
             time.sleep(tx_wait)
@@ -511,7 +511,7 @@ def amm_create_request(secret, account, asset1: Amount, asset2: Amount, tradingF
                 "TradingFee" : "%s",
                 "Asset1" : %s,
                 "Asset2" : %s,
-                "TransactionType" : "AMMInstanceCreate"
+                "TransactionType" : "AMMCreate"
             }
        }
    ]
@@ -767,7 +767,7 @@ def vote_request(secret: str, account: str, hash: str,
                 "TransactionType": "AMMVote",
                 "Account": "%s",
                 "AMMID": "%s",
-                "FeeVal": %s,
+                "TradingFee": %s,
                 "Fee": "%s",
                 "Flags": %d
             }
@@ -1211,7 +1211,6 @@ def amm_deposit(line):
                         return False
                 # amount
                 else:
-                    print('got amount')
                     asset2, rest = Amount.nextFromStr(rest)
                     if asset2 is None or rest != '':
                         return False
@@ -1666,8 +1665,10 @@ def expect_amm(line):
             return True
 
         if ne(amToken1) or ne(amToken2) or (lpToken is not None and lpToken != token):
+            tokens = '' if lpToken is None else f'{lpToken},{token}'
             raise Exception(f'{line.strip()}: ##FAILED## {amToken1.toStr()},{asset1.toStr()},'
-                            f'{amToken2.toStr()},{asset2.toStr()}')
+                            f'{amToken2.toStr()},{asset2.toStr()},'
+                            f'{tokens}')
 
     rx = Re()
     if rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+none\s*$', line):
@@ -1701,7 +1702,7 @@ def expect_amm(line):
             if tokens != res['result']['LPToken']['value']:
                 raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
         else:
-            proc(rx.match[1], rx.match[2], rx.match[4])
+            proc(rx.match[1], rx.match[2], rx.match[3])
         return True
     return False
 
