@@ -229,11 +229,12 @@ class Issue:
         return f'{self.currency}/{self.issuer}'
     def json(self):
         if self.native():
+            #return "\"XRP\""
             return """
-             {
+            {
                 "currency" : "XRP"
-             }
-             """
+            }
+            """
         else:
             return """
             {
@@ -241,6 +242,11 @@ class Issue:
                 "issuer": "%s"
             }
             """ % (self.currency, self.issuer)
+    def fromJson(j):
+        if type(j) == str:
+            return Issue('XRP')
+        else:
+            return Issue(j['currency'], j['issuer'])
 
 class Amount:
     def __init__(self, issue: Issue, value : float):
@@ -574,7 +580,7 @@ Asset1In and Asset2In
 Asset1In and LPToken
 Asset1In and EPrice
 '''
-def amm_deposit_request(secret, account, hash, tokens: Amount = None, asset1: Amount = None, asset2: Amount = None, eprice: Amount = None, fee="10"):
+def amm_deposit_request(secret, account, issues, tokens: Amount = None, asset1: Amount = None, asset2: Amount = None, eprice: Amount = None, fee="10"):
     def fields():
         if asset1 is not None:
             if asset2 is not None:
@@ -605,7 +611,8 @@ def amm_deposit_request(secret, account, hash, tokens: Amount = None, asset1: Am
              "tx_json": {
                  "Flags": 0,
                  "Account" : "%s",
-                 "AMMID" : "%s",
+                 "Token1" : %s,
+                 "Token2" : %s,
                  "Fee": "%s",
                  %s
                  "TransactionType" : "AMMDeposit"
@@ -613,7 +620,7 @@ def amm_deposit_request(secret, account, hash, tokens: Amount = None, asset1: Am
         }
     ]
     }
-    """ % (secret, account, hash, fee, fields())
+    """ % (secret, account, issues[0].json(), issues[1].json(), fee, fields())
 
 '''
 LPTokenIn
@@ -622,7 +629,7 @@ Asset1Out and Asset2Out
 Asset1Out and LPToken
 Asset1Out and EPrice
 '''
-def amm_withdraw_request(secret, account, hash, tokens: Amount = None, asset1: Amount = None, asset2: Amount = None, eprice: Amount=None, fee="10"):
+def amm_withdraw_request(secret, account, issues, tokens: Amount = None, asset1: Amount = None, asset2: Amount = None, eprice: Amount=None, fee="10"):
     flags = 0
     def fields():
         nonlocal flags
@@ -662,7 +669,8 @@ def amm_withdraw_request(secret, account, hash, tokens: Amount = None, asset1: A
              "secret": "%s",
              "tx_json": {
                  "Account" : "%s",
-                 "AMMID" : "%s",
+                 "Token1" : %s,
+                 "Token2" : %s,
                  "Fee": "%s",
                  %s
                  "TransactionType" : "AMMWithdraw",
@@ -671,7 +679,7 @@ def amm_withdraw_request(secret, account, hash, tokens: Amount = None, asset1: A
         }
     ]
     }
-    """ % (secret, account, hash, fee, fields(), flags)
+    """ % (secret, account, issues[0].json(), issues[1].json(), fee, fields(), flags)
 
 
 def amm_swap_request(secret, account, hash, dir, asset: Amount, assetLimit: Amount = None, splimit = None, slippage = None, fee = "10"):
@@ -755,7 +763,7 @@ def account_offers_request(account):
     }
     """ % (account)
 
-def vote_request(secret: str, account: str, hash: str,
+def vote_request(secret: str, account: str, issues,
                  feeVal: int, flags=0, fee="10"):
     return """
     {
@@ -766,7 +774,8 @@ def vote_request(secret: str, account: str, hash: str,
             "tx_json": {
                 "TransactionType": "AMMVote",
                 "Account": "%s",
-                "AMMID": "%s",
+                "Token1": %s,
+                "Token2": %s,
                 "TradingFee": %s,
                 "Fee": "%s",
                 "Flags": %d
@@ -774,9 +783,9 @@ def vote_request(secret: str, account: str, hash: str,
         }
     ]
     }
-    """ % (secret, account, hash, feeVal, fee, flags)
+    """ % (secret, account, issues[0].json(), issues[1].json(), feeVal, fee, flags)
 
-def bid_request(secret: str, account: str, hash: str,
+def bid_request(secret: str, account: str, issues,
                  pricet: str, bid: Amount, authAccounts = None, flags=0, fee="10"):
     if pricet == 'min':
         pricet = 'MinSlotPrice'
@@ -811,7 +820,8 @@ def bid_request(secret: str, account: str, hash: str,
             "tx_json": {
                 "TransactionType": "AMMBid",
                 "Account": "%s",
-                "AMMID": "%s",
+                "Token1": %s,
+                "Token2": %s,
                 %s
                 %s
                 "Fee": "%s",
@@ -820,7 +830,7 @@ def bid_request(secret: str, account: str, hash: str,
         }
     ]
     }
-    """ % (secret, account, hash, get_bid(), get_accounts(), fee, flags)
+    """ % (secret, account, issues[0].json(), issues[1].json(), get_bid(), get_accounts(), fee, flags)
 
 
 def do_format(s):
@@ -1076,14 +1086,16 @@ def amm_create(line):
             request = amm_info_request(None, amt1.issue, amt2.issue, 'validated')
             res = send_request(request, node, port)
             verbose = verboseSave
-            if 'result' not in res:
-                print('amm create failed')
+            if 'result' not in res or 'AMMID' not in res['result']:
+                print('amm create failed', res)
             else:
                 result = res['result']
                 ammAccount = result['AMMAccount']
                 tokens = result['LPToken']
                 accounts[alias] = {'id': ammAccount,
                                    'hash': result['AMMID'],
+                                   'token1': amt1.issue.json(),
+                                   'token2': amt2.issue.json(),
                                    'issue': {'currency': tokens['currency'], 'issuer': tokens['issuer']}}
                 with open('accounts.json', 'w') as f:
                     json.dump(accounts, f)
@@ -1098,6 +1110,11 @@ def getAMMHash(s):
     if s in accounts:
         return accounts[s]['hash']
     return s
+
+def getAMMIssues(s):
+    if s in accounts:
+        return (Issue.fromJson(json.loads(accounts[s]['token1'])), Issue.fromJson(json.loads(accounts[s]['token2'])))
+    return None
 
 def getAMMIssue(s) -> Issue :
     if s in accounts:
@@ -1130,12 +1147,12 @@ def amm_info(line):
     if rx.search(r'^\s*amm\s+info\s+(.+)$', line):
         rest = rx.match[1]
         if rx.search(r'^\s*([^\s]+)(\s+([^\s]+))?\s*$', rest) and not_currency(rx.match[1]):
-            # either an amm alias or amm hash
-            hash = getAMMHash(rx.match[1])
-            if hash is None:
+            issues = getAMMIssues(rx.match[1])
+            if issues is None:
+                print(rx.match[1], 'not found')
                 return False
             account = rx.match[3]
-            request = amm_info_by_hash_request(getAccountId(account), hash, 'validated')
+            request = amm_info_request(getAccountId(account), issues[0], issues[1], 'validated')
             res = send_request(request, node, port)
             print(do_format(pprint.pformat(res['result'])))
             return True
@@ -1164,6 +1181,7 @@ def amm_info(line):
         return True
     return False
 
+# note: hash is an alias for issue1,issue2
 # amm deposit account hash tokens
 # amm deposit account hash asset1in
 # amm deposit account hash asset1in asset2in
@@ -1177,9 +1195,9 @@ def amm_deposit(line):
         if account_id is None:
             print(rx.match[1], 'account not found')
             return None
-        hash = getAMMHash(rx.match[2])
-        if hash is None:
-            print(rx.match[2], 'hash not found')
+        (issues) = getAMMIssues(rx.match[2])
+        if issues is None:
+            print(rx.match[2], 'tokens not found')
             return None
         issue = getAMMIssue(rx.match[2])
         rest = rx.match[3]
@@ -1214,7 +1232,7 @@ def amm_deposit(line):
                     asset2, rest = Amount.nextFromStr(rest)
                     if asset2 is None or rest != '':
                         return False
-        request = amm_deposit_request(accounts[account]['seed'], account_id, hash, tokens, asset1, asset2, eprice)
+        request = amm_deposit_request(accounts[account]['seed'], account_id, issues, tokens, asset1, asset2, eprice)
         res = send_request(request, node, port)
         error(res)
         return True
@@ -1233,9 +1251,9 @@ def amm_withdraw(line):
         if account_id is None:
             print(rx.match[1], 'account not found')
             return None
-        hash = getAMMHash(rx.match[2])
+        issues = getAMMIssues(rx.match[2])
         if hash is None:
-            print(rx.match[2], 'hash not found')
+            print(rx.match[2], 'tokens not found')
             return None
         issue = getAMMIssue(rx.match[2])
         rest = rx.match[3]
@@ -1268,7 +1286,7 @@ def amm_withdraw(line):
                     asset2, rest = Amount.nextFromStr(rest)
                     if asset2 is None or rest != '':
                         return False
-        request = amm_withdraw_request(accounts[account]['seed'], account_id, hash, tokens, asset1, asset2, eprice)
+        request = amm_withdraw_request(accounts[account]['seed'], account_id, issues, tokens, asset1, asset2, eprice)
         res = send_request(request, node, port)
         error(res)
         return True
@@ -1586,12 +1604,12 @@ def amm_vote(line):
         if account_id is None:
             print(account, 'account not found')
             return False
-        hash = getAMMHash(rx.match[2])
-        if hash is None:
-            print(rx.match[2], 'hash not found')
+        issues = getAMMIssues(rx.match[2])
+        if issues is None:
+            print(rx.match[2], 'tokens not found')
             return False
         feeVal = int(rx.match[3])
-        request = vote_request(accounts[account]['seed'], account_id, hash, feeVal)
+        request = vote_request(accounts[account]['seed'], account_id, issues, feeVal)
         res = send_request(request, node, port)
         error(res)
         return True
@@ -1606,9 +1624,9 @@ def amm_bid(line):
         if account_id is None:
             print(account, 'account not found')
             return False
-        hash = getAMMHash(rx.match[2])
-        if hash is None:
-            print(rx.match[2], 'hash not found')
+        issues = getAMMIssues(rx.match[2])
+        if issues is None:
+            print(rx.match[2], 'tokens not found')
             return False
         pricet = rx.match[3]
         issue = getAMMIssue(rx.match[2])
@@ -1616,7 +1634,7 @@ def amm_bid(line):
         authAccounts = None
         if rx.match[6] is not None:
             authAccounts = rx.match[6].split(',')
-        request = bid_request(accounts[account]['seed'], account_id, hash, pricet, bid, authAccounts)
+        request = bid_request(accounts[account]['seed'], account_id, issues, pricet, bid, authAccounts)
         res = send_request(request, node, port)
         error(res)
         return True
@@ -1672,11 +1690,11 @@ def expect_amm(line):
 
     rx = Re()
     if rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+none\s*$', line):
-        hash = getAMMHash(rx.match[1])
-        if hash == rx.match[1]:
-            print(rx.match[1], 'hash not found')
+        issues = getAMMIssues(rx.match[1])
+        if issues == rx.match[1]:
+            print(rx.match[1], 'tokens not found')
             return None
-        request = amm_info_by_hash_request(None, hash)
+        request = amm_info_request(None, issues[0], issues[1], 'validated')
         res = send_request(request, node, port)
         if res['result']['error'] != 'actNotFound':
             raise Exception(f'{line.rstrip()}: ##FAILED## {res}')
@@ -1684,9 +1702,9 @@ def expect_amm(line):
     # expect amm hash account lptoken | expect amm token1 token2 lptoken?
     elif rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+([^\s]+)\s+(\d+(\.\d+)?)?\s*$', line):
         if getAccountId(rx.match[2]) is not None:
-            hash = getAMMHash(rx.match[1])
-            if hash == rx.match[1]:
-                print(rx.match[1], 'hash not found')
+            issues = getAMMIssues(rx.match[1])
+            if issues == rx.match[1]:
+                print(rx.match[1], 'tokens not found')
                 return None
             account = rx.match[2]
             account_id = getAccountId(account)
@@ -1697,7 +1715,7 @@ def expect_amm(line):
             if tokens is None:
                 print('tokens must be specified')
                 return None
-            request = amm_info_by_hash_request(account_id, hash)
+            request = amm_info_request(account_id, issues[0], issues[1], 'validated')
             res = send_request(request, node, port)
             if tokens != res['result']['LPToken']['value']:
                 raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
@@ -1710,12 +1728,12 @@ def expect_amm(line):
 def expect_trading_fee(line):
     rx = Re()
     if rx.search(r'^\s*expect\s+fee\s+([^\s]+)\s+(\d+)\s*$', line):
-        hash = getAMMHash(rx.match[1])
-        if hash == rx.match[1]:
-            print(rx.match[1], 'hash not found')
+        issues = getAMMIssues(rx.match[1])
+        if issues == rx.match[1]:
+            print(rx.match[1], 'tokens not found')
             return None
         fee = rx.match[2]
-        request = amm_info_by_hash_request(None, hash)
+        request = amm_info_request(None, issues[0], issues[1], 'validated')
         res = send_request(request, node, port)
         if res['result']['TradingFee'] != int(fee):
             raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["TradingFee"]}')
@@ -1879,14 +1897,14 @@ def repeat_cmd(line):
 def expect_auction(line):
     rx = Re()
     if rx.search(r'^\s*expect\s+auction\s+([^\s]+)\s+(\d+)\s+(\d+)\s+([^\s]+)\s*$', line):
-        hash = getAMMHash(rx.match[1])
-        if hash == rx.match[1]:
-            print(rx.match[1], 'hash not found')
+        issues = getAMMIssues(rx.match[1])
+        if issues == rx.match[1]:
+            print(rx.match[1], 'tokens not found')
             return None
         fee = int(rx.match[2])
         interval = int(rx.match[3])
         price = rx.match[4]
-        request = amm_info_by_hash_request(None, hash)
+        request = amm_info_request(None, issues[0], issues[1], 'validated')
         res = send_request(request, node, port)
         slot = res['result']['AuctionSlot']
         efee = slot['DiscountedFee']
@@ -1969,7 +1987,7 @@ def exec_command(line):
         try:
             res = command(line)
         except Exception as ex:
-            print(ex)
+            print(command, ex)
             res = None
             break
         if res is None or res:
