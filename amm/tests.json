@@ -1,4 +1,5 @@
 [
+    "# Enable the following features: FlowCross, FlowSortStrands, AMM, fixUniversalNumber",
     "# Run this script:./amm_tester.py ./tests.json",
     "# Runs on ammdevnet. Change next line to run on a different net.",
     "#set node ammdevnet:51234",
@@ -317,7 +318,7 @@
     "amm create alice 10000XRP 10100USD",
     "offer create bob 100XRP 100USD",
     "pay alice carol 200USD [] 200XRP partialPayment",
-    "expect amm 10100XRP 10000USD 9999499.98749938",
+    "expect amm 10100XRP 10000USD 10049875.62112089",
     "expect offers bob",
     "amm withdraw alice ammXRP-USD 0",
     "offer cancel alice",
