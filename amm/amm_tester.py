@@ -52,7 +52,9 @@ validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':26
              'passive':65536, 'immediateOrCancel':131072, 'fillOrKill': 262144,
              'sell': 524288, 'accountTxnID':5, 'authorizedNFTokenMinter': 10, 'defaultRipple': 8,
              'depositAuth': 9, 'disableMaster': 4, 'disallowXRP': 3, 'globalFreeze': 7, 'noFreeze': 6,
-             'requireAuth': 2, 'requireDest': 1, 'withdrawAll': 65536, 'noRippleDirect': 65536}
+             'requireAuth': 2, 'requireDest': 1, 'withdrawAll': 0x20, 'noRippleDirect': 65536,
+              'LPToken': 0x01, 'SingleAsset': 0x02, 'TwoAsset': 0x04, 'OneAssetLPToken': 0x08,
+              'LimitLPToken': 0x10}
 
 try:
     with open('history.json', 'r') as f:
@@ -229,12 +231,12 @@ class Issue:
         return f'{self.currency}/{self.issuer}'
     def json(self):
         if self.native():
-            #return "\"XRP\""
-            return """
-            {
-                "currency" : "XRP"
-            }
-            """
+            return "\"XRP\""
+            #return """
+            #{
+            #    "currency" : "XRP"
+            #}
+            #"""
         else:
             return """
             {
@@ -515,8 +517,8 @@ def amm_create_request(secret, account, asset1: Amount, asset2: Amount, tradingF
                 "Account" : "%s",
                 "Fee": "%s",
                 "TradingFee" : "%s",
-                "Asset1" : %s,
-                "Asset2" : %s,
+                "Amount" : %s,
+                "Amount2" : %s,
                 "TransactionType" : "AMMCreate"
             }
        }
@@ -540,7 +542,7 @@ def amm_info_request(account, iou1: Issue, iou2: Issue, ledger_index = "validate
    "params": [
        {
            %s
-           "asset1" : %s,
+           "asset" : %s,
            "asset2" : %s
            %s
        }
@@ -575,32 +577,39 @@ def amm_info_by_hash_request(account, hash, ledger_index = "validated"):
 
 '''
 LPTokenOut
-Asset1In
-Asset1In and Asset2In
-Asset1In and LPToken
-Asset1In and EPrice
+Amount
+Amount and Amount2
+Amount and LPToken
+Amount and EPrice
 '''
 def amm_deposit_request(secret, account, issues, tokens: Amount = None, asset1: Amount = None, asset2: Amount = None, eprice: Amount = None, fee="10"):
+    flags = 0
     def fields():
+        nonlocal flags
         if asset1 is not None:
             if asset2 is not None:
+                flags = validFlags['TwoAsset']
                 return """
-                    "Asset1In": %s,
-                    "Asset2In": %s,
+                    "Amount": %s,
+                    "Amount2": %s,
                 """ % (asset1.json(), asset2.json())
             if tokens is not None:
+                flags = validFlags['OneAssetLPToken']
                 return """
-                "Asset1In": %s,
+                "Amount": %s,
                 "LPTokenOut": %s,
             """ % (asset1.json(), tokens.json())
             elif eprice is not None:
+                flags = validFlags['LimitLPToken']
                 return """
-                "Asset1In": %s,
+                "Amount": %s,
                 "EPrice": %s,
                 """ % (asset1.json(), eprice.json())
             else:
-                return f'"Asset1In": {asset1.json()},'
+                flags = validFlags['SingleAsset']
+                return f'"Amount": {asset1.json()},'
         elif tokens is not None:
+            flags = validFlags['LPToken']
             return f'"LPTokenOut": {tokens.json()},'
     return """
     {
@@ -609,25 +618,25 @@ def amm_deposit_request(secret, account, issues, tokens: Amount = None, asset1: 
         {
              "secret": "%s",
              "tx_json": {
-                 "Flags": 0,
                  "Account" : "%s",
-                 "Token1" : %s,
-                 "Token2" : %s,
+                 "Asset" : %s,
+                 "Asset2" : %s,
                  "Fee": "%s",
                  %s
-                 "TransactionType" : "AMMDeposit"
+                 "TransactionType" : "AMMDeposit",
+                 "Flags": %d
              }
         }
     ]
     }
-    """ % (secret, account, issues[0].json(), issues[1].json(), fee, fields())
+    """ % (secret, account, issues[0].json(), issues[1].json(), fee, fields(), flags)
 
 '''
 LPTokenIn
-Asset1Out
-Asset1Out and Asset2Out
-Asset1Out and LPToken
-Asset1Out and EPrice
+Amount
+Amount and Amount2
+Amount and LPToken
+Amount and EPrice
 '''
 def amm_withdraw_request(secret, account, issues, tokens: Amount = None, asset1: Amount = None, asset2: Amount = None, eprice: Amount=None, fee="10"):
     flags = 0
@@ -635,30 +644,35 @@ def amm_withdraw_request(secret, account, issues, tokens: Amount = None, asset1:
         nonlocal flags
         if asset1 is not None:
             if asset2 is not None:
+                flags = validFlags['TwoAsset']
                 return """
-                    "Asset1Out": %s,
-                    "Asset2Out": %s,
+                    "Amount": %s,
+                    "Amount2": %s,
                 """ % (asset1.json(), asset2.json())
             if tokens is not None:
+                flags = validFlags['OneAssetLPToken']
                 if tokens.value == 0.0:
-                    flags = 65536
+                    flags |= validFlags['withdrawAll']
                     return """
-                        "Asset1Out": %s,
+                        "Amount": %s,
                         """ % (asset1.json())
                 return """
-                    "Asset1Out": %s,
+                    "Amount": %s,
                     "LPTokenIn": %s,
                     """ % (asset1.json(), tokens.json())
             if eprice is not None:
+                flags = validFlags['LimitLPToken']
                 return """
-                "Asset1Out": %s,
+                "Amount": %s,
                 "EPrice": %s,
                 """ % (asset1.json(), eprice.json())
             else:
-                return f'"Asset1Out": {asset1.json()},'
+                flags = validFlags['SingleAsset']
+                return f'"Amount": {asset1.json()},'
         elif tokens is not None:
+            flags = validFlags['LPToken']
             if tokens.value == 0.0:
-                flags = 65536
+                flags |= validFlags['withdrawAll']
                 return ""
             return f'"LPTokenIn": {tokens.json()},'
     return """
@@ -669,8 +683,8 @@ def amm_withdraw_request(secret, account, issues, tokens: Amount = None, asset1:
              "secret": "%s",
              "tx_json": {
                  "Account" : "%s",
-                 "Token1" : %s,
-                 "Token2" : %s,
+                 "Asset" : %s,
+                 "Asset2" : %s,
                  "Fee": "%s",
                  %s
                  "TransactionType" : "AMMWithdraw",
@@ -774,8 +788,8 @@ def vote_request(secret: str, account: str, issues,
             "tx_json": {
                 "TransactionType": "AMMVote",
                 "Account": "%s",
-                "Token1": %s,
-                "Token2": %s,
+                "Asset": %s,
+                "Asset2": %s,
                 "TradingFee": %s,
                 "Fee": "%s",
                 "Flags": %d
@@ -788,9 +802,9 @@ def vote_request(secret: str, account: str, issues,
 def bid_request(secret: str, account: str, issues,
                  pricet: str, bid: Amount, authAccounts = None, flags=0, fee="10"):
     if pricet == 'min':
-        pricet = 'MinSlotPrice'
+        pricet = 'MinBidPrice'
     else:
-        pricet = 'MaxSlotPrice'
+        pricet = 'MaxBidPrice'
     def get_bid():
         if bid.value != 0:
             return """
@@ -820,8 +834,8 @@ def bid_request(secret: str, account: str, issues,
             "tx_json": {
                 "TransactionType": "AMMBid",
                 "Account": "%s",
-                "Token1": %s,
-                "Token2": %s,
+                "Asset": %s,
+                "Asset2": %s,
                 %s
                 %s
                 "Fee": "%s",
@@ -1086,10 +1100,10 @@ def amm_create(line):
             request = amm_info_request(None, amt1.issue, amt2.issue, 'validated')
             res = send_request(request, node, port)
             verbose = verboseSave
-            if 'result' not in res or 'AMMID' not in res['result']:
+            if 'result' not in res or 'amm' not in res['result'] or 'AMMID' not in res['result']['amm']:
                 print('amm create failed', res)
             else:
-                result = res['result']
+                result = res['result']['amm']
                 ammAccount = result['AMMAccount']
                 tokens = result['LPToken']
                 accounts[alias] = {'id': ammAccount,
@@ -1245,6 +1259,7 @@ def amm_deposit(line):
 # amm withdraw account hash asset1in @eprice
 def amm_withdraw(line):
     rx = Re()
+    # account hash rest
     if rx.search(r'^\s*amm\s+withdraw\s+([^\s]+)\s+([^\s]+)\s+(.+)$', line):
         account = rx.match[1]
         account_id = getAccountId(rx.match[1])
@@ -1252,7 +1267,7 @@ def amm_withdraw(line):
             print(rx.match[1], 'account not found')
             return None
         issues = getAMMIssues(rx.match[2])
-        if hash is None:
+        if issues is None:
             print(rx.match[2], 'tokens not found')
             return None
         issue = getAMMIssue(rx.match[2])
@@ -1280,7 +1295,7 @@ def amm_withdraw(line):
                     tokens = Amount(issue, float(rx.match[1]))
                 # eprice
                 elif rx.search(r'^\s*@(\d+(\.\d+)?)\s*$', rest):
-                    eprice = Amount(getAMMIssue(hash), float(rx.match[1]))
+                    eprice = Amount(asset1.issue, float(rx.match[1]))
                 # amount
                 else:
                     asset2, rest = Amount.nextFromStr(rest)
@@ -1669,11 +1684,11 @@ def expect_amm(line):
             lpToken = token
         request = amm_info_request(None, amToken1.issue, amToken2.issue, 'validated')
         res = send_request(request, node, port)
-        if 'error' in res['result']:
+        if 'error' in res['result'] or not 'amm' in res['result']:
             raise Exception(f'{line.rstrip()}: {res["result"]["error"]}')
-        asset1 = Amount.fromJson(res['result']['Asset1'])
-        asset2 = Amount.fromJson(res['result']['Asset2'])
-        token = res['result']['LPToken']['value']
+        asset1 = Amount.fromJson(res['result']['amm']['Amount'])
+        asset2 = Amount.fromJson(res['result']['amm']['Amount2'])
+        token = res['result']['amm']['LPToken']['value']
 
         def ne(asset: Amount) -> bool :
             if asset.issue == asset1.issue:
@@ -1717,7 +1732,7 @@ def expect_amm(line):
                 return None
             request = amm_info_request(account_id, issues[0], issues[1], 'validated')
             res = send_request(request, node, port)
-            if tokens != res['result']['LPToken']['value']:
+            if tokens != res['result']['amm']['LPToken']['value']:
                 raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
         else:
             proc(rx.match[1], rx.match[2], rx.match[3])
@@ -1735,8 +1750,8 @@ def expect_trading_fee(line):
         fee = rx.match[2]
         request = amm_info_request(None, issues[0], issues[1], 'validated')
         res = send_request(request, node, port)
-        if res['result']['TradingFee'] != int(fee):
-            raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["TradingFee"]}')
+        if res['result']['amm']['TradingFee'] != int(fee):
+            raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["amm"]["TradingFee"]}')
         return True
     return False
 
@@ -1906,7 +1921,7 @@ def expect_auction(line):
         price = rx.match[4]
         request = amm_info_request(None, issues[0], issues[1], 'validated')
         res = send_request(request, node, port)
-        slot = res['result']['AuctionSlot']
+        slot = res['result']['amm']['AuctionSlot']
         efee = slot['DiscountedFee']
         eprice = slot['Price']['value']
         einterval = slot['TimeInterval']
