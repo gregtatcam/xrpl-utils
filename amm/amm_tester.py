@@ -8,8 +8,9 @@ import re
 import pprint
 from collections import defaultdict
 
+do_pprint = True
 drops_per_xrp = 1_000_000
-port = 5005
+port = 51234
 node = '127.0.0.1'
 fund = False
 script = None
@@ -324,7 +325,7 @@ class Amount:
             return Amount(self.issue, self.value * other)
         raise Exception('can not multiply amounts')
 
-def send_request(request, node = None, port = '5005'):
+def send_request(request, node = None, port = '51234'):
     if node == None:
         node = "1"
     if re.search(r'^\d+$', node):
@@ -848,11 +849,18 @@ def bid_request(secret: str, account: str, issues,
 
 
 def do_format(s):
-    return s
+    if not do_pprint:
+        return s
     s = re.sub(genesis_acct, 'genesis', s)
-    for i in range(len(accounts)-1):
-        s = re.sub(accounts[i]['id'], 'acct%d' % i, s)
+    for (acct, d) in accounts.items():
+        s = re.sub(d['id'], acct, s)
+        if 'issue' in d:
+            s = re.sub(d['issue']['currency'], acct, s)
     return s
+
+def pair(s1, s2):
+    j = {s1: s2}
+    return do_format(pprint.pformat(j))
 
 def faucet_fund1(name, req_XRP: int):
     global burn_acct
@@ -960,18 +968,23 @@ def trust_set(line):
         return True
     return False
 
-# account info account
+# account info account [\[balance,flags,..\]]
 def account_info(line):
     rx = Re()
     global accounts
-    if rx.search(r'^\s*account\s+info\s+([^\s]+)\s*$', line):
+    if rx.search(r'^\s*account\s+info\s+([^\s]+)(\s+\[([^\s]+)\])?\s*$', line):
         for account in rx.match[1].split(','):
             id = getAccountId(account)
             if id is not None:
                 request = account_info_request(id)
                 res = send_request(request, node, port)
                 if 'account_data' in res['result']:
-                    print(do_format(pprint.pformat(res['result']['account_data'])))
+                    if rx.match[3] is not None:
+                        for field in rx.match[3].split(','):
+                            if field in res['result']['account_data']:
+                                print(pair(field, res['result']['account_data'][field]))
+                    else:
+                        print(do_format(pprint.pformat(res['result']['account_data'])))
                 elif 'error_message' in res['result']:
                     print(do_format(pprint.pformat(res['result']['error_message'])))
                 else:
@@ -981,17 +994,32 @@ def account_info(line):
         return True
     return False
 
-# account lines account
+# account lines account [\[cur1,cur2,..\]]
 def account_lines(line):
     global accounts
     rx = Re()
-    if rx.search(r'^\s*account\s+lines\s+([^\s]+)\s*$', line):
+    if rx.search(r'^\s*account\s+lines\s+([^\s]+)(\s+\[([^\s+]+)\])?\s*$', line):
         for account in rx.match[1].split(','):
             id = getAccountId(account)
             if id is not None:
                 request = account_trust_lines_request(id)
                 res = send_request(request, node, port)
-                print(do_format(pprint.pformat(res['result'])))
+                if rx.match[3] is not None:
+                    for cur in rx.match[3].split(','):
+                        iss = Issue.fromStr(cur)
+                        cur_ = cur
+                        if iss is not None:
+                            cur_ = iss.currency
+                        for l in res['result']['lines']:
+                            if l['currency'] == cur_:
+                                j = {'account': l['account'],
+                                     'balance': l['balance'],
+                                     'currency': l['currency'],
+                                     'limit': l['limit'],
+                                     }
+                                print(do_format(pprint.pformat(j)))
+                else:
+                    print(do_format(pprint.pformat(res['result'])))
             else:
                 print(rx.match[1], 'account not found')
         return True
@@ -1096,6 +1124,12 @@ def amm_create(line):
             error(res)
             if alias is None:
                 alias = f'amm{amt1.issue.currency}-{amt2.issue.currency}'
+            else:
+                # rm previous alias if exists
+                alias_prev = f'amm{amt1.issue.currency}-{amt2.issue.currency}'
+                if alias_prev in accounts:
+                    del accounts[alias_prev]
+            cur = f'{amt1.issue.currency}-{amt2.issue.currency}'
             verbose = False
             request = amm_info_request(None, amt1.issue, amt2.issue, 'validated')
             res = send_request(request, node, port)
@@ -1140,8 +1174,8 @@ def getAMMIssue(s) -> Issue :
             return Issue(issue['currency'], issue['issuer'])
     return None
 
-# amm info currency1 currency2 [account]
-# amm info hash [account]
+# amm info currency1 currency2 [account] [\[Amount,Amount2...\]]
+# amm info hash [account] [\[Amount,Amount2...\]]
 def amm_info(line):
     global accounts
     def do_save(res, alias):
@@ -1160,6 +1194,10 @@ def amm_info(line):
         line = re.sub(r'\s+save\s+([^\s]+)\s*$', '', line)
     if rx.search(r'^\s*amm\s+info\s+(.+)$', line):
         rest = rx.match[1]
+        fields = None
+        if rx.search(r'\s+\[([^\s+]+)\]', rest):
+            fields = rx.match[1].split(',')
+            rest = re.sub(r'\s+\[([^\s+]+)\]', '', rest)
         if rx.search(r'^\s*([^\s]+)(\s+([^\s]+))?\s*$', rest) and not_currency(rx.match[1]):
             issues = getAMMIssues(rx.match[1])
             if issues is None:
@@ -1168,7 +1206,12 @@ def amm_info(line):
             account = rx.match[3]
             request = amm_info_request(getAccountId(account), issues[0], issues[1], 'validated')
             res = send_request(request, node, port)
-            print(do_format(pprint.pformat(res['result'])))
+            if fields is not None:
+                for field in fields:
+                    if field in res['result']['amm']:
+                        print(pair(field, res['result']['amm'][field]))
+            else:
+                print(do_format(pprint.pformat(res['result'])))
             return True
         (iou1, rest) = Issue.nextFromStr(rest)
         if iou1 is None:
@@ -1189,7 +1232,12 @@ def amm_info(line):
                                        iou2,
                                        'validated')
             res = send_request(request, node, port)
-            print(do_format(pprint.pformat(res['result'])))
+            if fields is not None:
+                for field in fields:
+                    if field in res['result']['amm']:
+                        print(pair(field, res['result']['amm'][field]))
+            else:
+                print(do_format(pprint.pformat(res['result'])))
             if save is not None:
                 do_save(res, save)
         return True
@@ -1704,7 +1752,7 @@ def expect_amm(line):
                             f'{tokens}')
 
     rx = Re()
-    if rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+none\s*$', line):
+    if rx.search(r'^\s*expect\s+amm\s+([^\s]+)\s+none\s*$', line):
         issues = getAMMIssues(rx.match[1])
         if issues == rx.match[1]:
             print(rx.match[1], 'tokens not found')
@@ -1715,7 +1763,7 @@ def expect_amm(line):
             raise Exception(f'{line.rstrip()}: ##FAILED## {res}')
         return True
     # expect amm hash account lptoken | expect amm token1 token2 lptoken?
-    elif rx.search(r'\s*expect\s+amm\s+([^\s]+)\s+([^\s]+)\s+(\d+(\.\d+)?)?\s*$', line):
+    elif rx.search(r'^\s*expect\s+amm\s+([^\s]+)\s+([^\s]+)(\s+(\d+(\.\d+)?))?\s*$', line):
         if getAccountId(rx.match[2]) is not None:
             issues = getAMMIssues(rx.match[1])
             if issues == rx.match[1]:
@@ -1726,7 +1774,7 @@ def expect_amm(line):
             if account_id is None:
                 print(account, 'account not found')
                 return None
-            tokens = rx.match[3]
+            tokens = rx.match[4]
             if tokens is None:
                 print('tokens must be specified')
                 return None
@@ -1735,7 +1783,7 @@ def expect_amm(line):
             if tokens != res['result']['amm']['LPToken']['value']:
                 raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
         else:
-            proc(rx.match[1], rx.match[2], rx.match[3])
+            proc(rx.match[1], rx.match[2], rx.match[4])
         return True
     return False
 
@@ -1979,6 +2027,25 @@ def set_wait(line):
         return True
     return False
 
+def clear_store(line):
+    global store
+    rx = Re()
+    if rx.search(r'^\s*clear\s+store\s*$', line):
+        store = {}
+        return True
+    return False
+
+def toggle_pprint(line):
+    global do_pprint
+    rx = Re()
+    if rx.search(r'^\s*pprint\s+(on|off)\s*$', line):
+        if rx.match[1] == 'on':
+            do_pprint = True
+        else:
+            do_pprint = False
+        return True
+    return False
+
 commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_lines, pay, amm_create,
             amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
             help, do_history, clear_history, show_accounts, print_account,
@@ -1986,7 +2053,7 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_line
             set_account, set_issue, offer_cancel, account_set, flags, load_accounts,
             server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
-            expect_auction, get_line, get_balance, set_wait]
+            expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint]
 
 def prompt():
     sys.stdout.write('> ')
