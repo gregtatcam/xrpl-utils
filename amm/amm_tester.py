@@ -232,12 +232,11 @@ class Issue:
         return f'{self.currency}/{self.issuer}'
     def json(self):
         if self.native():
-            return "\"XRP\""
-            #return """
-            #{
-            #    "currency" : "XRP"
-            #}
-            #"""
+            return """
+            {
+                "currency" : "XRP"
+            }
+            """
         else:
             return """
             {
@@ -246,10 +245,11 @@ class Issue:
             }
             """ % (self.currency, self.issuer)
     def fromJson(j):
-        if type(j) == str:
+        if type(j) == str and j == 'XRP':
             return Issue('XRP')
-        else:
-            return Issue(j['currency'], j['issuer'])
+        elif j['currency'] == 'XRP':
+            return Issue('XRP')
+        return Issue(j['currency'], j['issuer'])
 
 class Amount:
     def __init__(self, issue: Issue, value : float):
@@ -803,9 +803,9 @@ def vote_request(secret: str, account: str, issues,
 def bid_request(secret: str, account: str, issues,
                  pricet: str, bid: Amount, authAccounts = None, flags=0, fee="10"):
     if pricet == 'min':
-        pricet = 'MinBidPrice'
+        pricet = 'BidMin'
     else:
-        pricet = 'MaxBidPrice'
+        pricet = 'BidMax'
     def get_bid():
         if bid.value != 0:
             return """
@@ -1343,7 +1343,7 @@ def amm_withdraw(line):
                     tokens = Amount(issue, float(rx.match[1]))
                 # eprice
                 elif rx.search(r'^\s*@(\d+(\.\d+)?)\s*$', rest):
-                    eprice = Amount(asset1.issue, float(rx.match[1]))
+                    eprice = Amount(issue, float(rx.match[1]))
                 # amount
                 else:
                     asset2, rest = Amount.nextFromStr(rest)
