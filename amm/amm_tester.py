@@ -54,8 +54,9 @@ validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':26
              'sell': 524288, 'accountTxnID':5, 'authorizedNFTokenMinter': 10, 'defaultRipple': 8,
              'depositAuth': 9, 'disableMaster': 4, 'disallowXRP': 3, 'globalFreeze': 7, 'noFreeze': 6,
              'requireAuth': 2, 'requireDest': 1, 'withdrawAll': 0x20, 'noRippleDirect': 65536,
-              'LPToken': 0x01, 'SingleAsset': 0x02, 'TwoAsset': 0x04, 'OneAssetLPToken': 0x08,
-              'LimitLPToken': 0x10}
+              'LPToken': 0x00010000, 'WithdrawAll': 0x00020000, 'OneAssetWithdrawAll': 0x00040000,
+              'SingleAsset': 0x000080000, 'TwoAsset': 0x00100000, 'OneAssetLPToken': 0x00200000,
+              'LimitLPToken': 0x00400000}
 
 try:
     with open('history.json', 'r') as f:
@@ -653,7 +654,7 @@ def amm_withdraw_request(secret, account, issues, tokens: Amount = None, asset1:
             if tokens is not None:
                 flags = validFlags['OneAssetLPToken']
                 if tokens.value == 0.0:
-                    flags |= validFlags['withdrawAll']
+                    flags = validFlags['OneAssetWithdrawAll']
                     return """
                         "Amount": %s,
                         """ % (asset1.json())
@@ -673,7 +674,7 @@ def amm_withdraw_request(secret, account, issues, tokens: Amount = None, asset1:
         elif tokens is not None:
             flags = validFlags['LPToken']
             if tokens.value == 0.0:
-                flags |= validFlags['withdrawAll']
+                flags = validFlags['WithdrawAll']
                 return ""
             return f'"LPTokenIn": {tokens.json()},'
     return """
@@ -821,7 +822,7 @@ def bid_request(secret: str, account: str, issues,
             account_id = getAccountId(account)
             if account_id is None:
                 raise Exception(f'Invalid account {account}')
-            s += '{"AuthAccount": {"Account": "' + account_id + '"}}' + d
+            s += d+ '{"AuthAccount": {"Account": "' + account_id + '"}}'
             d = ','
         s += '],'
         return s
@@ -1678,7 +1679,7 @@ def amm_vote(line):
         return True
     return False
 
-# amm bid lp hash (min|max) price
+# amm bid lp hash (min|max) price [acct1,acct2]
 def amm_bid(line):
     rx = Re()
     if rx.search(r'\s*amm\s+bid\s+([^\s]+)\s+([^\s]+)\s+(min|max)\s+([^\s]+)(\s+([^\s+]+))?\s*$', line):
