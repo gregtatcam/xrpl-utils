@@ -1385,7 +1385,7 @@ def amm_swap(line):
         return True
     return False
 
-# offer create acct takerPaysAmt takerGetsAmt
+# offer create acct takerPaysAmt [gw] takerGetsAmt [gw]
 def offer(line):
     rx = Re()
     if rx.search(r'^\s*offer\s+create\s+([^\s]+)\s+(.+)$', line):
@@ -1397,10 +1397,16 @@ def offer(line):
         rest = rx.match[2]
         takerPays, rest = Amount.nextFromStr(rest)
         if takerPays is None:
-            return False
+            # try with issuer
+            takerPays, rest = Amount.nextFromStr(rest, True)
+            if takerPays is None:
+                return False
         takerGets,rest = Amount.nextFromStr(rest)
         if takerGets is None:
-            return False
+            # try with issuer
+            takerGets, rest = Amount.nextFromStr(rest, True)
+            if takerGets is None:
+                return False
         flags = 0
         if rx.search(r'^\s*([^\s]+)\s*$', rest):
             flags = getFlags(rx.match[1], None)
