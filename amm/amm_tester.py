@@ -848,6 +848,19 @@ def bid_request(secret: str, account: str, issues,
     }
     """ % (secret, account, issues[0].json(), issues[1].json(), get_bid(), get_accounts(), fee, flags)
 
+def tx_request(txid):
+    return """
+    {
+    "method": "tx",
+    "params": [
+        {
+            "transaction": "%s",
+            "binary": false
+        }
+    ]
+    }
+    """ % txid
+
 
 def do_format(s):
     if not do_pprint:
@@ -2053,6 +2066,16 @@ def toggle_pprint(line):
         return True
     return False
 
+def tx_lookup(line):
+    rx = Re()
+    if rx.search(r'^\s*tx\s+([^\s]+)\s*$', line):
+        txid = rx.match[1]
+        request = tx_request(txid)
+        res = send_request(request, node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    return False
+
 commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_lines, pay, amm_create,
             amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
             help, do_history, clear_history, show_accounts, print_account,
@@ -2060,7 +2083,8 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_line
             set_account, set_issue, offer_cancel, account_set, flags, load_accounts,
             server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
-            expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint]
+            expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
+            tx_lookup]
 
 def prompt():
     sys.stdout.write('> ')
