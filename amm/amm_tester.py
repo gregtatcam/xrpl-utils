@@ -56,7 +56,7 @@ validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':26
              'requireAuth': 2, 'requireDest': 1, 'withdrawAll': 0x20, 'noRippleDirect': 65536,
               'LPToken': 0x00010000, 'WithdrawAll': 0x00020000, 'OneAssetWithdrawAll': 0x00040000,
               'SingleAsset': 0x000080000, 'TwoAsset': 0x00100000, 'OneAssetLPToken': 0x00200000,
-              'LimitLPToken': 0x00400000}
+              'LimitLPToken': 0x00400000, 'setNoRipple': 0x00020000, 'clearNoRipple': 0x00040000}
 
 try:
     with open('history.json', 'r') as f:
@@ -475,7 +475,7 @@ def account_info_request(account):
 
 # issuer - the address of the account to extend trust to
 # value - limit of the trust
-def trust_request(secret, account, amount: Amount, fee = '10'):
+def trust_request(secret, account, amount: Amount, flags=262144, fee = '10'):
     return """
     {
     "method": "submit",
@@ -486,13 +486,13 @@ def trust_request(secret, account, amount: Amount, fee = '10'):
                 "TransactionType": "TrustSet",
                 "Account": "%s",
                 "Fee": "%s",
-                "Flags": 262144,
+                "Flags": %d,
                 "LimitAmount": %s
             }
         }
     ]
     }
-    """ % (secret, account, fee, amount.json())
+    """ % (secret, account, fee, flags, amount.json())
 
 def account_trust_lines_request(account):
     return """
@@ -950,17 +950,24 @@ def fund(line):
         return True
     return False
 
-# trust set account,account1,.. amount currency issuer
+# trust set account,account1,.. amount currency issuer [flags]
 def trust_set(line):
     rx = Re()
     global accounts
     if rx.search(r'^\s*trust\s+set\s+([^\s]+)\s+(.+)$', line):
         accts = rx.match[1]
         rest = rx.match[2]
-        amount = Amount.fromStr(rest, True)
+        (amount, rest) = Amount.nextFromStr(rest, True)
         if amount is None:
             print('invalid amount')
             return None
+        flags = 262144 # clear no ripple
+        if rest != '':
+            rest = rest.strip(' ')
+            if not rest in validFlags:
+                print('invalid flags')
+                return None
+            flags = validFlags[rest]
         save_wait()
         try:
             for account in accts.split(','):
@@ -969,7 +976,8 @@ def trust_set(line):
                 else:
                     request = trust_request(accounts[account]['seed'],
                                             accounts[account]['id'],
-                                            amount)
+                                            amount,
+                                            flags)
                     res = send_request(request, node, port)
                     if not error(res):
                         issuers[amount.issue.currency] = getAlias(amount.issue.issuer)
