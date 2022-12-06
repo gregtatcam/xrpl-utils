@@ -1136,12 +1136,15 @@ def amm_create(line):
         if account not in accounts:
             print(account, 'account not found')
         else:
+            res = send_request('{"method":"server_state"}', node, port)
+            fee = res['result']['state']['validated_ledger']['reserve_inc']
             verboseSave = verbose
             request = amm_create_request(accounts[account]['seed'],
                                          accounts[account]['id'],
                                          amt1,
                                          amt2,
-                                         tfee)
+                                         tfee,
+                                         fee)
             res = send_request(request, node, port)
             error(res)
             if alias is None:
@@ -2084,6 +2087,14 @@ def tx_lookup(line):
         return True
     return False
 
+def server_state(line):
+    rx = Re()
+    if rx.search(r'^\s*server\s+state\s*$', line):
+        res = send_request('{"method":"server_state"}', node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    return False
+
 commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_lines, pay, amm_create,
             amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
             help, do_history, clear_history, show_accounts, print_account,
@@ -2092,7 +2103,7 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_line
             server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
             expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
-            tx_lookup]
+            tx_lookup, server_state]
 
 def prompt():
     sys.stdout.write('> ')
