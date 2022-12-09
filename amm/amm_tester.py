@@ -200,11 +200,11 @@ class Issue:
         rx = Re()
         # AMM issue
         if rx.search(r'^\s*\$([^\s]+)(.*)', s):
-            hash = getAMMHash(rx.match[1])
-            if hash is None:
-                print(rx.match[1], 'hash not found')
+            issue = getAMMIssue(rx.match[1])
+            if issue is None:
+                print(rx.match[1], 'issue not found')
                 return (None, s)
-            return (getAMMIssue(rx.match[1]), rx.match[2])
+            return (issue, rx.match[2])
         elif rx.search(r'^\s*([^\s]+)(.*)$', s):
             currency = rx.match[1].upper()
             rest = rx.match[2]
@@ -460,18 +460,18 @@ def tx_request(hash):
     }
     """ % hash
 
-def account_info_request(account):
+def account_info_request(account, index='validated'):
     return """
     {
     "method": "account_info",
     "params": [
         {
             "account": "%s",
-            "ledger_index": "validated"
+            "ledger_index": "%s"
         }
     ]
     }
-    """ % (account)
+    """ % (account, index)
 
 # issuer - the address of the account to extend trust to
 # value - limit of the trust
@@ -494,18 +494,18 @@ def trust_request(secret, account, amount: Amount, flags=262144, fee = '10'):
     }
     """ % (secret, account, fee, flags, amount.json())
 
-def account_trust_lines_request(account):
+def account_trust_lines_request(account, index='validated'):
     return """
     {
     "method": "account_lines",
     "params": [
         {
             "account": "%s",
-            "ledger_index": "validated"
+            "ledger_index": "%s"
         }
     ]
     }
-    """ % (account)
+    """ % (account, index)
 
 def amm_create_request(secret, account, asset1: Amount, asset2: Amount, tradingFee="0", fee="10"):
     return """
@@ -990,19 +990,22 @@ def trust_set(line):
         return True
     return False
 
-# account info account [\[balance,flags,..\]]
+# account info account [$ledger] [\[balance,flags,..\]]
 def account_info(line):
     rx = Re()
     global accounts
-    if rx.search(r'^\s*account\s+info\s+([^\s]+)(\s+\[([^\s]+)\])?\s*$', line):
+    if rx.search(r'^\s*account\s+info\s+([^\s]+)(\s+\$([^\s]+))?(\s+\[([^\s]+)\])?\s*$', line):
         for account in rx.match[1].split(','):
             id = getAccountId(account)
             if id is not None:
-                request = account_info_request(id)
+                index = 'validated'
+                if rx.match[3] != None:
+                    index = rx.match[3]
+                request = account_info_request(id, index)
                 res = send_request(request, node, port)
                 if 'account_data' in res['result']:
-                    if rx.match[3] is not None:
-                        for field in rx.match[3].split(','):
+                    if rx.match[5] is not None:
+                        for field in rx.match[5].split(','):
                             if field in res['result']['account_data']:
                                 print(pair(field, res['result']['account_data'][field]))
                     else:
@@ -1016,18 +1019,21 @@ def account_info(line):
         return True
     return False
 
-# account lines account [\[cur1,cur2,..\]]
+# account lines account [ledger] [\[cur1,cur2,..\]]
 def account_lines(line):
     global accounts
     rx = Re()
-    if rx.search(r'^\s*account\s+lines\s+([^\s]+)(\s+\[([^\s+]+)\])?\s*$', line):
+    if rx.search(r'^\s*account\s+lines\s+([^\s]+)(\s+\$([^\s]+))?(\s+\[([^\s+]+)\])?\s*$', line):
         for account in rx.match[1].split(','):
             id = getAccountId(account)
             if id is not None:
-                request = account_trust_lines_request(id)
+                index = 'validated'
+                if rx.match[3] != None:
+                    index = rx.match[3]
+                request = account_trust_lines_request(id, index)
                 res = send_request(request, node, port)
-                if rx.match[3] is not None:
-                    for cur in rx.match[3].split(','):
+                if rx.match[5] is not None:
+                    for cur in rx.match[5].split(','):
                         iss = Issue.fromStr(cur)
                         cur_ = cur
                         if iss is not None:
@@ -1098,6 +1104,8 @@ def pay(line):
                     res = send_request(payment, node, port)
                     if error(res):
                         break
+                    if verbose:
+                        print(res)
             except Exception as ex:
                 raise ex
             finally:
@@ -1159,14 +1167,13 @@ def amm_create(line):
             request = amm_info_request(None, amt1.issue, amt2.issue, 'validated')
             res = send_request(request, node, port)
             verbose = verboseSave
-            if 'result' not in res or 'amm' not in res['result'] or 'AMMID' not in res['result']['amm']:
+            if 'result' not in res or 'amm' not in res['result']:
                 print('amm create failed', res)
             else:
                 result = res['result']['amm']
-                ammAccount = result['AMMAccount']
-                tokens = result['LPToken']
+                ammAccount = result['amm_account']
+                tokens = result['lp_token']
                 accounts[alias] = {'id': ammAccount,
-                                   'hash': result['AMMID'],
                                    'token1': amt1.issue.json(),
                                    'token2': amt2.issue.json(),
                                    'issue': {'currency': tokens['currency'], 'issuer': tokens['issuer']}}
@@ -1199,15 +1206,14 @@ def getAMMIssue(s) -> Issue :
             return Issue(issue['currency'], issue['issuer'])
     return None
 
-# amm info currency1 currency2 [account] [\[Amount,Amount2...\]]
-# amm info hash [account] [\[Amount,Amount2...\]]
+# amm info currency1 currency2 [account] [\[Amount,Amount2...\]] [$ledger]
+# amm info hash [account] [\[Amount,Amount2...\]] [$ledger]
 def amm_info(line):
     global accounts
     def do_save(res, alias):
         result = res['result']
-        tokens = result['LPToken']
-        accounts[alias] = {'id': result['AMMAccount'],
-                           'hash': result['AMMID'],
+        tokens = result['lp_token']
+        accounts[alias] = {'id': result['amm_account'],
                            'issue': {'currency': tokens['currency'], 'issuer': tokens['issuer']}}
         with open('accounts.json', 'w') as f:
             json.dump(accounts, f)
@@ -1217,6 +1223,10 @@ def amm_info(line):
     if rx.search(r'\s+save\s+([^\s]+)\s*$', line):
         save = rx.match[1]
         line = re.sub(r'\s+save\s+([^\s]+)\s*$', '', line)
+    index = 'validated'
+    if rx.search(r'\s+\$([^\s]+)', line):
+        index = rx.match[1]
+        line = re.sub(r'\s+\$([^\s]+)', '', line)
     if rx.search(r'^\s*amm\s+info\s+(.+)$', line):
         rest = rx.match[1]
         fields = None
@@ -1229,7 +1239,7 @@ def amm_info(line):
                 print(rx.match[1], 'not found')
                 return False
             account = rx.match[3]
-            request = amm_info_request(getAccountId(account), issues[0], issues[1], 'validated')
+            request = amm_info_request(getAccountId(account), issues[0], issues[1], index)
             res = send_request(request, node, port)
             if fields is not None:
                 for field in fields:
@@ -1255,7 +1265,7 @@ def amm_info(line):
             request = amm_info_request(getAccountId(account),
                                        iou1,
                                        iou2,
-                                       'validated')
+                                       index)
             res = send_request(request, node, port)
             if fields is not None:
                 for field in fields:
@@ -1765,9 +1775,9 @@ def expect_amm(line):
         res = send_request(request, node, port)
         if 'error' in res['result'] or not 'amm' in res['result']:
             raise Exception(f'{line.rstrip()}: {res["result"]["error"]}')
-        asset1 = Amount.fromJson(res['result']['amm']['Amount'])
-        asset2 = Amount.fromJson(res['result']['amm']['Amount2'])
-        token = res['result']['amm']['LPToken']['value']
+        asset1 = Amount.fromJson(res['result']['amm']['amount'])
+        asset2 = Amount.fromJson(res['result']['amm']['amount2'])
+        token = res['result']['amm']['lp_token']['value']
 
         def ne(asset: Amount) -> bool :
             if asset.issue == asset1.issue:
@@ -1811,7 +1821,7 @@ def expect_amm(line):
                 return None
             request = amm_info_request(account_id, issues[0], issues[1], 'validated')
             res = send_request(request, node, port)
-            if tokens != res['result']['amm']['LPToken']['value']:
+            if tokens != res['result']['amm']['lp_token']['value']:
                 raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
         else:
             proc(rx.match[1], rx.match[2], rx.match[4])
@@ -1829,8 +1839,8 @@ def expect_trading_fee(line):
         fee = rx.match[2]
         request = amm_info_request(None, issues[0], issues[1], 'validated')
         res = send_request(request, node, port)
-        if res['result']['amm']['TradingFee'] != int(fee):
-            raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["amm"]["TradingFee"]}')
+        if res['result']['amm']['trading_fee'] != int(fee):
+            raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["amm"]["trading_fee"]}')
         return True
     return False
 
@@ -2000,10 +2010,10 @@ def expect_auction(line):
         price = rx.match[4]
         request = amm_info_request(None, issues[0], issues[1], 'validated')
         res = send_request(request, node, port)
-        slot = res['result']['amm']['AuctionSlot']
-        efee = slot['DiscountedFee']
-        eprice = slot['Price']['value']
-        einterval = slot['TimeInterval']
+        slot = res['result']['amm']['auction_slot']
+        efee = slot['discounted_fee']
+        eprice = slot['price']['value']
+        einterval = slot['time_interval']
         if efee != fee or einterval != interval or eprice != price:
             raise Exception(f'{line.rstrip()}: failed {fee},{einterval},{eprice}')
         return True
