@@ -42,7 +42,9 @@ ammdevnet = 'http://amm.devnet.rippletest.net'
 
 # accounts keyed by alias, store account_id and master_seed as a pair
 accounts = defaultdict(defaultdict)
-# currency to the issuer map
+# currency to the issuer map, can have more than 3 letters/digits, like USD1.
+# this allows same currency but different issuer.
+# only first three letters are used in the payload.
 issuers = defaultdict()
 # commands history
 history = list()
@@ -153,7 +155,7 @@ def getPaths(paths):
             if cur == 'XRP':
                 ps.append({"currency": cur, "issuer": "rrrrrrrrrrrrrrrrrrrrrhoLvTp"})
             elif cur in issuers:
-                ps.append({"currency": cur, "issuer": getAccountId(issuers[cur])})
+                ps.append({"currency": cur[0:3], "issuer": getAccountId(issuers[cur])})
             elif rx.search(r'^\$([^\s]+)$', cur):
                 issue = getAMMIssue(rx.match[1])
                 ps.append({"currency":issue.currency, "issuer":issue.issuer})
@@ -244,7 +246,7 @@ class Issue:
                 "currency" : "%s",
                 "issuer": "%s"
             }
-            """ % (self.currency, self.issuer)
+            """ % (self.currency[0:3], self.issuer)
     def fromJson(j):
         if type(j) == str and j == 'XRP':
             return Issue('XRP')
@@ -269,7 +271,7 @@ class Amount:
                 "issuer": "%s",
                 "value": "%s"
             }
-            """ % (self.issue.currency, self.issue.issuer, self.value)
+            """ % (self.issue.currency[0:3], self.issue.issuer, self.value)
     def fromIssue(iou: Issue):
         return Amount(iou, 0)
     # <amount XRP|IOU
