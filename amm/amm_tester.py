@@ -352,6 +352,8 @@ def send_request(request, node = None, port = '51234'):
     j = json.loads(res.text)
     return j
 
+### Start requests
+
 def faucet_send_request(request):
     res = requests.post('https://ammfaucet.devnet.rippletest.net/accounts', json=json.loads(request))
     if res.status_code != 200:
@@ -862,6 +864,83 @@ def tx_request(txid):
     ]
     }
     """ % txid
+
+def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
+    assets_res = True if asset is not None and asset2 is not None else False
+    id_res = True if id is not None else False
+    assert (assets_res and not id_res) or (id_res and not assets_res)
+    if id is not None:
+        return """
+        {
+          "method": "ledger_entry",
+          "params": [
+            {
+            "amm": "%s",
+            "ledger_index": "%s"
+            } 
+          ]
+        }
+        """ % (id, index)
+    else:
+        return """
+        {
+          "method": "ledger_entry",
+          "params": [
+            {
+            "amm": {
+              "asset": %s,
+              "asset2": %s
+            },
+            "ledger_index": "%s"
+            } 
+          ]
+        }
+        """ % (asset.json(), asset2.json(), index)
+
+def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker='None', type_=None):
+    if hash is None and index is None:
+        index = 'validated'
+    def get_hash():
+        if hash is None:
+            return ""
+        return """
+            "ledger_hash": "%s",
+        """ % (hash)
+    def get_index():
+        if index is None:
+            return ""
+        return """
+            "ledger_index": "%s",
+        """ % (index)
+    def get_marker():
+        if marker is None:
+            return ""
+        return """
+            "marker": %d,
+        """ % (marker)
+    def get_type():
+        if type_ is None:
+            return ""
+        return """
+            "type": "%s",
+        """ % (type_)
+    return """
+    {
+    "method": "ledger_data",
+    "params": [
+        {
+            "binary": %s,
+            %s
+            %s
+            %s
+            %s
+            "limit": %d
+        }
+    ]
+    }
+    """ % (binary, get_hash(), get_index(), get_marker(), get_type(), limit)
+
+### End requests
 
 
 def do_format(s):
@@ -2107,6 +2186,69 @@ def server_state(line):
         return True
     return False
 
+# ledger entry XRP USD | object_id
+def ledger_entry(line):
+    rx = Re()
+    # ledger entry object_id
+    if rx.search(r'^\s*ledger\s+entry\s+([^\s]+)\s*$', line):
+        id = rx.match[1]
+        req = ledger_entry_request(id=id)
+        res = send_request(req, node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    # ledger entry asset asset2
+    elif rx.search(r'^\s*ledger\s+entry\s+([^\s]+)\s+([^\s]+)\s*$', line):
+        asset = Issue.fromStr(rx.match[1])
+        if asset is None:
+            print('Invalid asset', asset)
+            return None
+        asset2 = Issue.fromStr(rx.match[2])
+        if asset2 is None:
+            print('Invalid asset', asset2)
+            return None
+        print('call ledger entry')
+        req = ledger_entry_request(asset=asset, asset2=asset2)
+        res = send_request(req, node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    return False
+
+# ledger data [#hash] [@index] [$limit] [%binary] [^marker] [type]
+def ledger_data(line):
+    rx = Re()
+    if rx.search(r'^\s*ledger\s+data\s+(.+)\s*$', line):
+        rest = rx.match[1]
+        hash = None
+        index = 'validated'
+        binary = 'false'
+        limit = 5
+        marker = None
+        type_ = None
+        if rx.search(r'#([^\s]+)', rest):
+            hash = rx.match[1]
+            rest = re.sub(r'#([^\s]+)', '', rest)
+        if rx.search(r'@([^\s]+)', rest):
+            index = rx.match[1]
+            rest = re.sub(r'@([^\s]+)', '', rest)
+        if rx.search(r'\$([^\s]+)', rest):
+            limit = int(rx.match[1])
+            rest = re.sub(r'\$([^\s]+)', '', rest)
+        if rx.search(r'\%([^\s]+)', rest):
+            binary = rx.match[1]
+            rest = re.sub(r'\%([^\s]+)', '', rest)
+        if rx.search(r'\^([^\s]+)', rest):
+            marker = int(rx.match[1])
+            rest = re.sub(r'\^([^\s]+)', '', rest)
+        rest = re.sub(r'\s+', '', rest)
+        if rest != '':
+            type_ = rest
+        req = ledger_data_request(hash=hash, index=index, limit=limit, binary=binary, marker=marker, type_ = type_)
+        res = send_request(req, node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    return False
+
+
 commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_lines, pay, amm_create,
             amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
             help, do_history, clear_history, show_accounts, print_account,
@@ -2115,7 +2257,7 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_line
             server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
             expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
-            tx_lookup, server_state]
+            tx_lookup, server_state, ledger_entry, ledger_data]
 
 def prompt():
     sys.stdout.write('> ')
