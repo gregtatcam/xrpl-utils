@@ -2062,18 +2062,34 @@ def eval_expect_expr(expr):
         return None
 
 # repeat start end+1 cmd
+# cmd can have expression (n*$i), when n must be int number
+# $i is the current iter and can be concatenated with other params
+# it can also contain padding format
+# for instance,
+# repeat 1 3 trust set (100*$i)A$2i gw
+# results in two commands:
+# trust set 100A01 gw
+# trust set 200A02 gw
+# trust set 300A03 gw
 def repeat_cmd(line):
     rx = Re()
     if rx.search(r'^\s*repeat\s+(\d+)\s+(\d+)\s+(.+)$', line):
         start = int(rx.match[1])
         end = int(rx.match[2])
+        # original expression that doesn't change
         cmd_ = rx.match[3]
+        # evaluated expression
         cmd__ = cmd_
         for i in range(start, end + 1):
             if rx.search(r'\((\d+)\s*\*\s*\$i\)', cmd_):
                 expr = int(rx.match[1]) * i
                 cmd__ = re.sub(r'\((.+)\)', str(expr), cmd_)
-            cmd = re.sub(r'\$i', str(i), cmd__)
+            r = r'\$i'
+            i_ = i
+            if rx.search(r'\$(\d)i', cmd__):
+                i_ = '{num:0{width}}'.format(num=i, width=int(rx.match[1]))
+                r = r'\$(\d)i'
+            cmd = re.sub(r, i_, cmd__)
             exec_command(cmd)
         return True
     return False
