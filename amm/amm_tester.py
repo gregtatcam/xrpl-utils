@@ -783,6 +783,21 @@ def account_offers_request(account):
     }
     """ % (account)
 
+def book_offers_request(taker_pays: Issue, taker_gets: Issue, limit = 10):
+    return """
+    {
+    "method": "book_offers",
+    "params": [
+        {
+            "taker": "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59",
+            "taker_pays": %s,
+            "taker_gets": %s,
+            "limit": %d
+        }
+    ]
+    }
+    """ % (taker_pays.json(), taker_gets.json(), limit)
+
 def vote_request(secret: str, account: str, issues,
                  feeVal: int, flags=0, fee="10"):
     return """
@@ -2264,6 +2279,48 @@ def ledger_data(line):
         return True
     return False
 
+# book offers taker_pays [gw] taker_gets [gw] [limit] [[field1,field2,...]]
+def book_offers(line):
+    rx = Re()
+    if rx.search(r'^\s*book\s+offers\s+(.+)$', line):
+        fields = None
+        rest = rx.match[1]
+        if rx.search(r'\[([^\s]+)\]', rest):
+            fields = rx.match[1].split(',')
+            rest = re.sub(r'\[([^\s]+)\]', '', rest)
+        taker_pays, rest = Issue.nextFromStr(rest)
+        if taker_pays is None:
+            # try with issuer
+            taker_pays, rest = Issue.nextFromStr(rest, True)
+            if taker_pays is None:
+                print('invalid taker pays', rest)
+                return None
+        taker_gets, rest = Issue.nextFromStr(rest)
+        if taker_gets is None:
+            # try with issuer
+            taker_gets, rest = Issue.nextFromStr(rest, True)
+            if taker_gets is None:
+                print('invalid taker gets', rest)
+                return None
+        limit = 10
+        if rx.search(r'(\d+)', rest):
+            limit = int(rx.match[1])
+        request = book_offers_request(taker_pays, taker_gets, limit)
+        res = send_request(request, node, port)
+        if fields is None:
+            print(do_format(pprint.pformat(res['result'])))
+        else:
+            l = list()
+            for offer in res['result']['offers']:
+                j = dict()
+                for field in fields:
+                    if field in offer:
+                        j[field] = offer[field]
+                l.append(j)
+            print(do_format(pprint.pformat(l)))
+        return True
+    return False
+
 
 commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_lines, pay, amm_create,
             amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
@@ -2273,7 +2330,7 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_line
             server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
             expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
-            tx_lookup, server_state, ledger_entry, ledger_data]
+            tx_lookup, server_state, ledger_entry, ledger_data, book_offers]
 
 def prompt():
     sys.stdout.write('> ')
