@@ -155,7 +155,7 @@ def getPaths(paths):
             if cur == 'XRP':
                 ps.append({"currency": cur, "issuer": "rrrrrrrrrrrrrrrrrrrrrhoLvTp"})
             elif cur in issuers:
-                ps.append({"currency": cur[0:3], "issuer": getAccountId(issuers[cur])})
+                ps.append({"currency": getCurrency(cur), "issuer": getAccountId(issuers[cur])})
             elif rx.search(r'^\$([^\s]+)$', cur):
                 issue = getAMMIssue(rx.match[1])
                 ps.append({"currency":issue.currency, "issuer":issue.issuer})
@@ -179,12 +179,15 @@ def getFlags(flags, default):
         return str(n)
     return default
 
+def getCurrency(currency):
+    return currency[0:3] if not currency.startswith('03') else currency
 
 class Issue:
     def __init__(self, currency, issuer = None):
         # hack to pass in drops
         self.drops = False
-        currency = currency.upper()
+        if len(currency) == 3:
+            currency = currency.upper()
         if currency == 'XRPD':
             currency = 'XRP'
             self.drops = True
@@ -246,7 +249,7 @@ class Issue:
                 "currency" : "%s",
                 "issuer": "%s"
             }
-            """ % (self.currency[0:3], self.issuer)
+            """ % (getCurrency(self.currency), self.issuer)
     def fromJson(j):
         if type(j) == str and j == 'XRP':
             return Issue('XRP')
@@ -271,7 +274,7 @@ class Amount:
                 "issuer": "%s",
                 "value": "%s"
             }
-            """ % (self.issue.currency[0:3], self.issue.issuer, self.value)
+            """ % (getCurrency(self.issue.currency), self.issue.issuer, self.value)
     def fromIssue(iou: Issue):
         return Amount(iou, 0)
     # <amount XRP|IOU
@@ -2082,7 +2085,7 @@ def eval_expect_expr(expr):
 # it can also contain padding format
 # for instance,
 # repeat 1 3 trust set (100*$i)A$2i gw
-# results in two commands:
+# results in three commands:
 # trust set 100A01 gw
 # trust set 200A02 gw
 # trust set 300A03 gw
@@ -2100,7 +2103,7 @@ def repeat_cmd(line):
                 expr = int(rx.match[1]) * i
                 cmd__ = re.sub(r'\((.+)\)', str(expr), cmd_)
             r = r'\$i'
-            i_ = i
+            i_ = str(i)
             if rx.search(r'\$(\d)i', cmd__):
                 i_ = '{num:0{width}}'.format(num=i, width=int(rx.match[1]))
                 r = r'\$(\d)i'
