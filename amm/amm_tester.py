@@ -60,11 +60,48 @@ validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':26
               'SingleAsset': 0x000080000, 'TwoAsset': 0x00100000, 'OneAssetLPToken': 0x00200000,
               'LimitLPToken': 0x00400000, 'setNoRipple': 0x00020000, 'clearNoRipple': 0x00040000}
 
-try:
-    with open('history.json', 'r') as f:
-        history = json.load(f)
-except:
-    pass
+def load_history():
+    global history
+    try:
+        with open('history.json', 'r') as f:
+            history = json.load(f)
+    except:
+        history = list()
+
+def load_accounts_():
+    global accounts
+    try:
+        with open('accounts.json', 'r') as f:
+            accounts = json.load(f)
+    except:
+        accounts = defaultdict(defaultdict)
+
+def load_issuers():
+    global issuers
+    try:
+        with open('issuers.json', 'r') as f:
+            issuers = json.load(f)
+    except:
+        issuers = defaultdict()
+
+def dump_history():
+    global history
+    with open('history.json', 'w') as f:
+        json.dump(history, f)
+
+def dump_accounts():
+    global accounts
+    with open('accounts.json', 'w') as f:
+        json.dump(accounts, f)
+
+def dump_issuers():
+    global issuers
+    with open('issuers.json', 'w') as f:
+        json.dump(issuers, f)
+
+load_history()
+load_accounts_()
+load_issuers()
 
 def save_wait():
     global tx_wait
@@ -361,6 +398,7 @@ def quoted(val):
     if type(val) == str:
         return f'"%s"' % val
     return str(val)
+
 def get_field(field, val, delim=True):
     if val is None:
         return ""
@@ -1037,8 +1075,7 @@ def faucet_fund(line):
             raise ex
         finally:
             restore_wait()
-        with open('accounts.json', 'w') as f:
-            json.dump(accounts, f)
+        dump_accounts()
         return True
     return False
 
@@ -1073,8 +1110,7 @@ def fund(line):
             raise ex
         finally:
             restore_wait()
-        with open('accounts.json', 'w') as f:
-            json.dump(accounts, f)
+        dump_accounts()
         return True
     return False
 
@@ -1113,8 +1149,7 @@ def trust_set(line):
             raise ex
         finally:
             restore_wait()
-        with open('issuers.json', 'w') as f:
-            json.dump(issuers, f)
+        dump_issuers()
         return True
     return False
 
@@ -1305,8 +1340,7 @@ def amm_create(line):
                                    'token1': amt1.issue.json(),
                                    'token2': amt2.issue.json(),
                                    'issue': {'currency': tokens['currency'], 'issuer': tokens['issuer']}}
-                with open('accounts.json', 'w') as f:
-                    json.dump(accounts, f)
+                dump_accounts()
         return True
     return False
 
@@ -1343,8 +1377,7 @@ def amm_info(line):
         tokens = result['lp_token']
         accounts[alias] = {'id': result['amm_account'],
                            'issue': {'currency': tokens['currency'], 'issuer': tokens['issuer']}}
-        with open('accounts.json', 'w') as f:
-            json.dump(accounts, f)
+        dump_accounts()
     rx = Re()
     # save?
     save = None
@@ -1627,10 +1660,8 @@ def session_restore(line):
     rx = Re()
     if rx.search(r'\s*session\s+restore\s*$', line):
         try:
-            with open('accounts.json', 'r') as f:
-                accounts = json.load(f)
-            with open('issuers.json', 'r') as f:
-                issuers = json.load(f)
+            load_accounts_()
+            load_issuers()
             for h in reversed(history):
                 if rx.search(r'^\s*set\s+node', h):
                     exec_command(h)
@@ -1691,8 +1722,18 @@ def clear_history(line):
     rx = Re()
     if rx.search(r'^\s*clear\s+history\s*$', line):
         history = list()
+        dump_history()
         return True
     return False
+
+def clear_all(line):
+    global accounts
+    global issuers
+    accounts = defaultdict(defaultdict)
+    issuers = defaultdict()
+    dump_accounts()
+    dump_issuers()
+
 
 def show_accounts(line):
     global accounts
@@ -2315,9 +2356,11 @@ def ledger_data(line):
 def account_objects(line):
     rx = Re()
     if rx.search(r'^\s*account\s+objects\s+([^\s]+)(.+)\s*$', line):
-        account = rx.match[1]
+        account = getAccountId(rx.match[1])
+        if account is None:
+            print('invalid account', account)
+            return None
         rest = rx.match[2]
-        print(account, rest)
         hash = None
         index = 'validated'
         delete_only = 'false'
@@ -2401,7 +2444,7 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_objects, account_i
             server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
             expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
-            tx_lookup, server_state, ledger_entry, ledger_data, book_offers]
+            tx_lookup, server_state, ledger_entry, ledger_data, book_offers, clear_all]
 
 def prompt():
     sys.stdout.write('> ')
