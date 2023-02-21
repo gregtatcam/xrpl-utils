@@ -357,6 +357,17 @@ def send_request(request, node = None, port = '51234'):
 
 ### Start requests
 
+def quoted(val):
+    if type(val) == str:
+        return f'"%s"' % val
+    return str(val)
+def get_field(field, val, delim=True):
+    if val is None:
+        return ""
+    return """
+        "%s": %s%s
+    """ % (field, quoted(val), ',' if delim else '')
+
 def faucet_send_request(request):
     res = requests.post('https://ammfaucet.devnet.rippletest.net/accounts', json=json.loads(request))
     if res.status_code != 200:
@@ -957,6 +968,24 @@ def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker
     ]
     }
     """ % (binary, get_hash(), get_index(), get_marker(), get_type(), limit)
+
+def account_objects_request(account, hash=None, index=None, limit='5', marker='None', type_=None, delete_only = 'false'):
+    return """
+    {
+    "method": "account_objects",
+    "params": [
+        {
+            "account": "%s",
+            %s
+            %s
+            %s
+            "deletion_blokers_only": %s,
+            "limit": %d
+        }
+    ]
+    }
+    """ % (account, get_field('ledger_index', index),
+           get_field('type', type_), get_field('marker', marker), delete_only, limit)
 
 ### End requests
 
@@ -2282,6 +2311,45 @@ def ledger_data(line):
         return True
     return False
 
+# account objects account [#hash] [@index] [$limit] [^maker] [delete_only] [type]
+def account_objects(line):
+    rx = Re()
+    if rx.search(r'^\s*account\s+objects\s+([^\s]+)(.+)\s*$', line):
+        account = rx.match[1]
+        rest = rx.match[2]
+        print(account, rest)
+        hash = None
+        index = 'validated'
+        delete_only = 'false'
+        limit = 5
+        marker = None
+        type_ = None
+        if rx.search(r'#([^\s]+)', rest):
+            hash = rx.match[1]
+            rest = re.sub(r'#([^\s]+)', '', rest)
+        if rx.search(r'@([^\s]+)', rest):
+            index = rx.match[1]
+            rest = re.sub(r'@([^\s]+)', '', rest)
+        if rx.search(r'\$([^\s]+)', rest):
+            limit = int(rx.match[1])
+            rest = re.sub(r'\$([^\s]+)', '', rest)
+        if rx.search(r'\^([^\s]+)', rest):
+            marker = int(rx.match[1])
+            rest = re.sub(r'\^([^\s]+)', '', rest)
+        if rx.search(r'(true|false)', rest):
+            delete_only = rx.match[1]
+            rest = re.sub(r'\^(true|false)', '', rest)
+        rest = re.sub(r'\s+', '', rest)
+        if rest != '':
+            type_ = rest
+        req = account_objects_request(account, hash=hash, index=index, limit=limit, marker=marker,
+                                      delete_only = delete_only, type_ = type_)
+        print(req)
+        res = send_request(req, node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    return False
+
 # book offers taker_pays [gw] taker_gets [gw] [limit] [[field1,field2,...]]
 def book_offers(line):
     rx = Re()
@@ -2325,7 +2393,7 @@ def book_offers(line):
     return False
 
 
-commands = [repeat_cmd, fund, faucet_fund, trust_set, account_info, account_lines, pay, amm_create,
+commands = [repeat_cmd, fund, faucet_fund, trust_set, account_objects, account_info, account_lines, pay, amm_create,
             amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
             help, do_history, clear_history, show_accounts, print_account,
             show_issuers, toggle_verbose, last, offer, account_offers, set_node,
