@@ -395,7 +395,7 @@ def send_request(request, node = None, port = '51234'):
 ### Start requests
 
 def quoted(val):
-    if type(val) == str:
+    if type(val) == str and val != 'true' and val != 'false':
         return f'"%s"' % val
     return str(val)
 
@@ -429,6 +429,26 @@ def accountset_request(secret: str, account: str, t: str, flags: str, fee="10"):
         ]
         }
         """ % (secret, account, fee, t, flags)
+
+def account_delete_request(secret: str, account: str, destination: str, tag: str = None, fee="10", flags=0):
+    return """
+       { 
+        "method": "submit",
+        "params": [
+            {
+                "secret": "%s",
+                "tx_json": {
+                    "TransactionType": "AccountDelete",
+                    "Account": "%s",
+                    "Destination": "%s",
+                    "DestinationTag": 13,
+                    "Fee": "%s",
+                    "Flags": %d
+                }
+            }
+        ]
+        } 
+    """ % (secret, account, destination, get_field('DestinationTag', tag), fee, flags)
 
 """
 {
@@ -834,6 +854,71 @@ def account_offers_request(account):
     ]
     }
     """ % (account)
+
+def account_channels_request(account, destination = None, index = 'validated'):
+    return """
+    {
+    "method": "account_channels",
+    "params": [
+        {
+            "account": "%s",
+            %s
+            "ledger_index": "%s"
+        }
+    ]
+    }
+    """ % (account, get_field('destination_account', destination), index)
+
+
+def account_currencies_request(account, index = 'validated'):
+    return """
+    {
+    "method": "account_currencies",
+    "params": [
+        {
+            "account": "%s",
+            "ledger_index": "%s"
+        }
+    ]
+    }
+    """ % (account, index)
+
+
+def account_nfts_request(account, index = 'validated'):
+    return """
+    {
+    "method": "account_nfts",
+    "params": [
+        {
+            "account": "%s",
+            "ledger_index": "%s"
+        }
+    ]
+    }
+    """ % (account, index)
+
+
+def account_tx_request(account, hash=None, index=None, limit=None, binary=None,
+                       marker=None, min=None, max=None, forward=None):
+    return """
+    {
+    "method": "account_tx",
+    "params": [{
+            "account": "%s",
+            %s
+            %s
+            %s
+            %s
+            %s
+            %s
+            %s
+            %s
+        }]
+    }
+    """ % (account, get_field('ledger_hash', hash), get_field('ledger_index', index),
+           get_field('limit', limit), get_field('binary', binary), get_field('marker', marker),
+           get_field('ledger_index_min', min), get_field('ledger_index_max', max),
+           get_field('forward', forward, False))
 
 def book_offers_request(taker_pays: Issue, taker_gets: Issue, limit = 10):
     return """
@@ -1581,7 +1666,7 @@ def amm_swap(line):
     return False
 
 # offer create acct takerPaysAmt [gw] takerGetsAmt [gw]
-def offer(line):
+def offer_create(line):
     rx = Re()
     if rx.search(r'^\s*offer\s+create\s+([^\s]+)\s+(.+)$', line):
         account = rx.match[1]
@@ -1817,6 +1902,114 @@ def account_set(line):
             error(res)
         return True
     return False
+
+def account_delete(line):
+    global accounts
+    rx = Re()
+    if rx.search(r'^\s*account\s+delete\s+([^\s]+)\s+([^\s]+)(\s+(\d+))?\s*$', line):
+        account = getAccountId(rx.match[1])
+        if account is None:
+            print(account, 'account not found')
+            return None
+        destination = getAccountId(rx.match[2])
+        if destination is None:
+            print(destination, 'destination not found')
+            return None
+        tag = rx.match[5]
+        request = account_delete_request(accounts[account]['seed'], account, destination, tag)
+        res = send_request(request, node, port)
+        error(res)
+        accounts.pop(account)
+        dump_accounts()
+        return True
+    return False
+
+def account_channels(line):
+    rx = Re()
+    if rx.search(r'^\s*account\s+channels\s+([^\s]+)(\s+([^\s]+))?\s*$', line):
+        account = getAccountId(rx.match[1])
+        if account is None:
+            print(account, 'account not found')
+            return None
+        destination = None
+        if rx.match[3] is not None:
+            destination = getAccountId(rx.match[3])
+            if destination is None:
+                print(destination, 'destination not found')
+                return None
+        request = account_channels_request(account, destination)
+        res = send_request(request, node, port)
+        error(res)
+        return True
+    return False
+
+
+def account_currencies(line):
+    rx = Re()
+    if rx.search(r'^\s*account\s+currencies\s+([^\s]+)\s*$', line):
+        account = getAccountId(rx.match[1])
+        if account is None:
+            print(account, 'account not found')
+            return None
+        request = account_currencies_request(account)
+        res = send_request(request, node, port)
+        error(res)
+        return True
+    return False
+
+
+def account_nfts(line):
+    rx = Re()
+    if rx.search(r'^\s*account\s+nfts\s+([^\s]+)\s*$', line):
+        account = getAccountId(rx.match[1])
+        if account is None:
+            print(account, 'account not found')
+            return None
+        request = account_nfts_request(account)
+        res = send_request(request, node, port)
+        error(res)
+        return True
+    return False
+
+# ledger account [#hash] [@index] [$limit] [%binary] [^marker] [min-] [max-] [frwd-]
+def account_tx(line):
+    rx = Re()
+    if rx.search(r'^\s*account\s+tx\s+([^\s]+)(.*)$', line):
+        account = getAccountId(rx.match[1])
+        rest = rx.match[2]
+        if account is None:
+            print(account, 'account not found')
+            return None
+        binary = None
+        forward = None
+        min = None
+        max = None
+        limit = None
+        marker = None
+        hash = None
+        index = None
+        if rx.search(r'#([^\s]+)', line):
+            hash = rx.match[1]
+        if rx.search(r'@([^\s]+)', line):
+            index = rx.match[1]
+        if rx.search(r'\$([^\s]+)', line):
+            limit = int(rx.match[1])
+        if rx.search(r'%([^\s]+)', line):
+            binary = rx.match[1]
+        if rx.search(r'^([^\s]+)', line):
+            marker = rx.match[1]
+        if rx.search(r'^min-([^\s]+)', line):
+            min = rx.match[1]
+        if rx.search(r'^max-([^\s]+)', line):
+            max = rx.match[1]
+        if rx.search(r'^frwd-([^\s]+)', line):
+            forward = rx.match[1]
+        request = account_tx_request(account, hash, index, limit, binary, marker, min, max, forward)
+        res = send_request(request, node, port)
+        error(res)
+        return True
+    return False
+
 
 def set_issue(line):
     global issuers
@@ -2435,13 +2628,38 @@ def book_offers(line):
         return True
     return False
 
+def account_commands(line):
+    rx = Re()
+    if rx.search(r'^\s*account\s+(objects|info|lines|offers|SetFlag|ClearFlag|delete|channels|currencies|nfts|tx)', line):
+        cmd = {'objects': account_objects, 'info': account_info, 'lines': account_lines,
+               'offers': account_offers, 'SetFlag': account_set, 'ClearFlag': account_set,
+               'delete': account_delete, 'channels': account_channels, 'currencies': account_currencies,
+               'nfts': account_nfts, 'tx': account_tx}
+        return cmd[rx.match[1]]
+    return False
 
-commands = [repeat_cmd, fund, faucet_fund, trust_set, account_objects, account_info, account_lines, pay, amm_create,
-            amm_deposit, amm_withdraw, amm_swap, amm_info, session_restore,
-            help, do_history, clear_history, show_accounts, print_account,
-            show_issuers, toggle_verbose, last, offer, account_offers, set_node,
-            set_account, set_issue, offer_cancel, account_set, flags, load_accounts,
-            server_info, amm_vote, amm_bid, amm_hash, expect_amm, expect_line,
+def offer_commands(line):
+    rx = Re()
+    if rx.search(r'\s*offer\s+(create|cancel)', line):
+        cmd = {'create': offer_create, 'cancel': offer_cancel}
+        return cmd[rx.match[1]]
+    return False
+
+def amm_commands(line):
+    rx = Re()
+    if rx.search(r'\s*amm\s+(create|deposit|withdraw|swap|vote|bid|info)', line):
+        cmd = {'create': amm_create, 'deposit': amm_deposit, 'withdraw': amm_withdraw,
+               'swap': amm_swap, 'vote': amm_vote, 'bid': amm_bid, 'info': amm_info}
+        return cmd[rx.match[1]]
+    return False
+
+
+commands = [repeat_cmd, fund, faucet_fund, trust_set, account_commands,
+            offer_commands, pay, amm_commands,
+            session_restore, help, do_history, clear_history, show_accounts, print_account,
+            show_issuers, toggle_verbose, last, set_node,
+            set_account, set_issue, flags, load_accounts,
+            server_info, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
             expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
             tx_lookup, server_state, ledger_entry, ledger_data, book_offers, clear_all]
