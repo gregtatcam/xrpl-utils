@@ -2574,7 +2574,7 @@ def account_objects(line):
             rest = re.sub(r'\^([^\s]+)', '', rest)
         if rx.search(r'(true|false)', rest):
             delete_only = rx.match[1]
-            rest = re.sub(r'\^(true|false)', '', rest)
+            rest = re.sub(r'(true|false)', '', rest)
         rest = re.sub(r'\s+', '', rest)
         if rest != '':
             type_ = rest
@@ -2635,22 +2635,22 @@ def account_commands(line):
                'offers': account_offers, 'SetFlag': account_set, 'ClearFlag': account_set,
                'delete': account_delete, 'channels': account_channels, 'currencies': account_currencies,
                'nfts': account_nfts, 'tx': account_tx}
-        return cmd[rx.match[1]]
+        return cmd[rx.match[1]](line)
     return False
 
 def offer_commands(line):
     rx = Re()
-    if rx.search(r'\s*offer\s+(create|cancel)', line):
+    if rx.search(r'^\s*offer\s+(create|cancel)', line):
         cmd = {'create': offer_create, 'cancel': offer_cancel}
-        return cmd[rx.match[1]]
+        return cmd[rx.match[1]](line)
     return False
 
 def amm_commands(line):
     rx = Re()
-    if rx.search(r'\s*amm\s+(create|deposit|withdraw|swap|vote|bid|info)', line):
+    if rx.search(r'^\s*amm\s+(create|deposit|withdraw|swap|vote|bid|info)', line):
         cmd = {'create': amm_create, 'deposit': amm_deposit, 'withdraw': amm_withdraw,
                'swap': amm_swap, 'vote': amm_vote, 'bid': amm_bid, 'info': amm_info}
-        return cmd[rx.match[1]]
+        return cmd[rx.match[1]](line)
     return False
 
 
