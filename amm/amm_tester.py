@@ -404,6 +404,16 @@ def get_field(field, val, delim=True):
         "%s": %s%s
     """ % (field, json.JSONEncoder().encode(val), ',' if delim else '')
 
+def get_with_prefix(prefix, params):
+    rx = Re()
+    r = r'' + prefix + '([^\s]+)'
+    print(r)
+    f = None
+    if rx.search(r, params):
+        f = rx.match[1]
+        params = re.sub(r'\s*' + r, '', params)
+    return f, params
+
 def get_params(params, def_index = None):
     rx = Re()
     index = def_index
@@ -1176,6 +1186,24 @@ def account_objects_request(account, hash=None, index=None, limit='5', marker='N
     }
     """ % (account, get_field('ledger_index', index),
            get_field('type', type_), get_field('marker', marker), delete_only, limit)
+
+def noripple_check_request(account, role, transactions, limit, hash, index):
+    return """
+    {
+    "method": "noripple_check",
+    "params": [
+        {
+            %s
+            %s
+            %s
+            %s
+            "role": "%s",
+            "account": "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59"
+        }
+    ]
+    }
+    """ % (account, role, get_field('transactions', transactions), get_field('limit', limit),
+           get_field('ledger_hash', hash), get_field('ledger_index', index))
 
 ### End requests
 
@@ -2624,7 +2652,7 @@ def account_objects(line):
     if rx.search(r'^\s*account\s+objects\s+([^\s]+)(.+)\s*$', line):
         account = getAccountId(rx.match[1])
         if account is None:
-            print('invalid account', account)
+            print(rx.match[1], 'account not found')
             return None
         rest = rx.match[2]
         type_ = None
@@ -2639,6 +2667,27 @@ def account_objects(line):
         print(do_format(pprint.pformat(res)))
         return True
     return False
+
+# noripple check account role transactions $limit #hash @index
+def noripple_check(line):
+    rx = Re()
+    if rx.search(r'^\s*noripple\s+check\s+([^\s]+)\s+([^\s]+)(.+)$', line):
+        account = getAccountId(rx.match[1])
+        if account is None:
+            print(rx.match[1], 'account not found')
+            return None
+        role = rx.match[2]
+        rest = rx.match[3]
+        hash, index, rest = get_params(rest)
+        transactions, rest = get_bool(rest)
+        limit, rest = get_with_prefix(r'\$', rest)
+        req = noripple_check_request(account, role, transactions, limit, hash, index)
+        res = send_request(req, node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    return False
+
+
 
 # book offers taker_pays [gw] taker_gets [gw] [limit] [[field1,field2,...]]
 def book_offers(line):
