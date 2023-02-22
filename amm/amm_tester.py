@@ -392,8 +392,6 @@ def send_request(request, node = None, port = '51234'):
     j = json.loads(res.text)
     return j
 
-### Start requests
-
 def quoted(val):
     if type(val) == str and val != 'true' and val != 'false':
         return f'"%s"' % val
@@ -404,8 +402,52 @@ def get_field(field, val, delim=True):
         return ""
     return """
         "%s": %s%s
-    """ % (field, quoted(val), ',' if delim else '')
+    """ % (field, json.JSONEncoder().encode(val), ',' if delim else '')
 
+def get_params(params, def_index = None):
+    rx = Re()
+    index = def_index
+    hash = None
+    if rx.search(r'#([^\s]+)', params):
+        hash = rx.match[1]
+        params = re.sub(r'\s*#[^\s]+', '', params)
+    if rx.search(r'@([^\s]+)', params):
+        index = rx.match[1]
+        params = re.sub(r'\s*@[^\s]+', '', params)
+    return (hash, index, params)
+
+def get_params_ext(params):
+    rx = Re()
+    limit = None
+    marker = None
+    bool = None
+    if rx.search(r'\^([^\s]+)', params):
+        marker = rx.match[1]
+        params = re.sub(r'\s*\^[^\s]+', '', params)
+    if rx.search(r'\s*\$([^\s]+)', params):
+        limit = int(rx.match[1])
+        params = re.sub(r'\s*\$[^\s]+', '', params)
+    if rx.search(r'(true|false)', params):
+        bool = int(rx.match[1])
+        params = re.sub(r'\s*(true|false)', '', params)
+    return (limit, marker, bool, params)
+
+def get_bool(params):
+    rx = Re()
+    bool = None
+    if rx.search(r'(true|false)', params):
+        bool = int(rx.match[1])
+        params = re.sub(r'\s*(true|false)', '', params)
+    return (bool, params)
+
+def get_array(params):
+    rx = Re()
+    if rx.search(r'\[([^\s]+)\]', params):
+        return rx.match[1].split(','), params
+    return None, params
+
+
+### Start requests
 def faucet_send_request(request):
     res = requests.post('https://ammfaucet.devnet.rippletest.net/accounts', json=json.loads(request))
     if res.status_code != 200:
@@ -843,59 +885,67 @@ def offer_cancel_request(secret, account, seq, flags=0, fee="10"):
     }
     """ % (secret, account, fee, flags, seq)
 
-def account_offers_request(account):
+def account_offers_request(account, hash = None, index = None):
     return """
     {
     "method": "account_offers",
     "params": [
         {
+            %s
+            %s
             "account": "%s"
         }
     ]
     }
-    """ % (account)
+    """ % (get_field('ledger_hash', hash), get_field('ledger_index', index), account)
 
-def account_channels_request(account, destination = None, index = 'validated'):
+def account_channels_request(account, destination = None, hash = None, index = None):
     return """
     {
     "method": "account_channels",
     "params": [
         {
-            "account": "%s",
             %s
-            "ledger_index": "%s"
+            %s
+            %s
+            "account": "%s"
         }
     ]
     }
-    """ % (account, get_field('destination_account', destination), index)
+    """ % (get_field('destination_account', destination), get_field('ledger_hash', hash),
+           get_field('ledger_index', index), account)
 
 
-def account_currencies_request(account, index = 'validated'):
+def account_currencies_request(account, strict = None, hash = None, index = None):
     return """
     {
     "method": "account_currencies",
     "params": [
         {
-            "account": "%s",
-            "ledger_index": "%s"
+            %s
+            %s
+            %s
+            "account": "%s"
         }
     ]
     }
-    """ % (account, index)
+    """ % (get_field('strict', strict), get_field('ledger_hash', hash), get_field('ledger_index', index),
+           account)
 
 
-def account_nfts_request(account, index = 'validated'):
+def account_nfts_request(account, hash = None, index = None):
     return """
     {
     "method": "account_nfts",
     "params": [
         {
+            %s
+            %s
             "account": "%s",
-            "ledger_index": "%s"
         }
     ]
     }
-    """ % (account, index)
+    """ % (get_field('ledger_hash', hash), get_field('ledger_index', index), account)
 
 
 def account_tx_request(account, hash=None, index=None, limit=None, binary=None,
@@ -919,6 +969,23 @@ def account_tx_request(account, hash=None, index=None, limit=None, binary=None,
            get_field('limit', limit), get_field('binary', binary), get_field('marker', marker),
            get_field('ledger_index_min', min), get_field('ledger_index_max', max),
            get_field('forward', forward, False))
+
+def gateway_balances_request(account, hash=None, index=None, strict=None, hotwallet=None):
+    return """
+    {
+    "method": "gateway_balances",
+    "params": [
+        {
+            %s
+            %s
+            %s
+            %s
+            "account": "%s"
+        }
+    ]
+    }
+    """ % (get_field('hotwallet', hotwallet), get_field('ledger_index', index),
+           get_field('ledger_hash', hash), get_field('strict', strict), account)
 
 def book_offers_request(taker_pays: Issue, taker_gets: Issue, limit = 10):
     return """
@@ -1723,15 +1790,17 @@ def offer_cancel(line):
         return True
     return False
 
+# account offers account #hash @index
 def account_offers(line):
     rx = Re()
-    if rx.search(r'^\s*account\s+offers\s+([^\s]+)$', line):
+    if rx.search(r'^\s*account\s+offers\s+([^\s]+)(.*)$', line):
         for account in rx.match[1].split(','):
             id = getAccountId(account)
             if id is None:
                 print(account, 'account not found')
                 return None
-            request = account_offers_request(id)
+            hash, index = get_params(rx.match[2])
+            request = account_offers_request(id, hash, index)
             res = send_request(request, node, port)
             print(do_format(pprint.pformat(res['result'])))
         return True
@@ -1814,10 +1883,14 @@ def clear_history(line):
 def clear_all(line):
     global accounts
     global issuers
-    accounts = defaultdict(defaultdict)
-    issuers = defaultdict()
-    dump_accounts()
-    dump_issuers()
+    rx = Re()
+    if rx.search(r'^\s*clear\s+all\s*$', line):
+        accounts = defaultdict(defaultdict)
+        issuers = defaultdict()
+        dump_accounts()
+        dump_issuers()
+        return True
+    return False
 
 
 def show_accounts(line):
@@ -1909,7 +1982,7 @@ def account_delete(line):
     if rx.search(r'^\s*account\s+delete\s+([^\s]+)\s+([^\s]+)(\s+(\d+))?\s*$', line):
         account = getAccountId(rx.match[1])
         if account is None:
-            print(account, 'account not found')
+            print(rx.match[1], 'account not found')
             return None
         destination = getAccountId(rx.match[2])
         if destination is None:
@@ -1924,50 +1997,60 @@ def account_delete(line):
         return True
     return False
 
+# account channels account #hash @index
 def account_channels(line):
     rx = Re()
-    if rx.search(r'^\s*account\s+channels\s+([^\s]+)(\s+([^\s]+))?\s*$', line):
+    if rx.search(r'^\s*account\s+channels\s+([^\s]+)(.*)$', line):
         account = getAccountId(rx.match[1])
         if account is None:
-            print(account, 'account not found')
+            print(rx.match[1], 'account not found')
             return None
+        rest = rx.match[2]
         destination = None
-        if rx.match[3] is not None:
-            destination = getAccountId(rx.match[3])
+        hash, index, rest = get_params(rest)
+        if rest is not None:
+            rest = rest.sub(r'\s+', '', rest)
+            destination = getAccountId(rest)
             if destination is None:
                 print(destination, 'destination not found')
                 return None
-        request = account_channels_request(account, destination)
+        request = account_channels_request(account, destination, hash, index)
         res = send_request(request, node, port)
-        error(res)
+        print(do_format(pprint.pformat(res['result'])))
         return True
     return False
 
 
+# account currencies account strict #hash @index
 def account_currencies(line):
     rx = Re()
-    if rx.search(r'^\s*account\s+currencies\s+([^\s]+)\s*$', line):
+    if rx.search(r'^\s*account\s+currencies\s+([^\s]+)(.*)$', line):
         account = getAccountId(rx.match[1])
         if account is None:
-            print(account, 'account not found')
+            print(rx.match[1], 'account not found')
             return None
-        request = account_currencies_request(account)
+        rest = rx.match[2]
+        hash, index, rest = get_params(rest)
+        strict, rest = get_bool(rest)
+        request = account_currencies_request(account, strict, hash, index)
         res = send_request(request, node, port)
-        error(res)
+        print(do_format(pprint.pformat(res['result'])))
         return True
     return False
 
 
+# account nfts account #hash @index
 def account_nfts(line):
     rx = Re()
-    if rx.search(r'^\s*account\s+nfts\s+([^\s]+)\s*$', line):
+    if rx.search(r'^\s*account\s+nfts\s+([^\s]+)(.*)$', line):
         account = getAccountId(rx.match[1])
         if account is None:
-            print(account, 'account not found')
+            print(rx.match[1], 'account not found')
             return None
-        request = account_nfts_request(account)
+        hash, index = get_params(rx.match[2])
+        request = account_nfts_request(account, hash, index)
         res = send_request(request, node, port)
-        error(res)
+        print(do_format(pprint.pformat(res['result'])))
         return True
     return False
 
@@ -1978,26 +2061,13 @@ def account_tx(line):
         account = getAccountId(rx.match[1])
         rest = rx.match[2]
         if account is None:
-            print(account, 'account not found')
+            print(rx.match[1], 'account not found')
             return None
-        binary = None
         forward = None
         min = None
         max = None
-        limit = None
-        marker = None
-        hash = None
-        index = None
-        if rx.search(r'#([^\s]+)', line):
-            hash = rx.match[1]
-        if rx.search(r'@([^\s]+)', line):
-            index = rx.match[1]
-        if rx.search(r'\$([^\s]+)', line):
-            limit = int(rx.match[1])
-        if rx.search(r'%([^\s]+)', line):
-            binary = rx.match[1]
-        if rx.search(r'^([^\s]+)', line):
-            marker = rx.match[1]
+        hash, index, line = get_params(line)
+        limit, marker, binary, line = get_params_ext(line)
         if rx.search(r'^min-([^\s]+)', line):
             min = rx.match[1]
         if rx.search(r'^max-([^\s]+)', line):
@@ -2006,9 +2076,30 @@ def account_tx(line):
             forward = rx.match[1]
         request = account_tx_request(account, hash, index, limit, binary, marker, min, max, forward)
         res = send_request(request, node, port)
-        error(res)
+        print(do_format(pprint.pformat(res['result'])))
         return True
     return False
+
+
+# gateway balances account strict [account,account] #hash @index
+def gateway_balances(line):
+    rx = Re()
+    if rx.search(r'^\s*gateway\s+balances\s+([^\s]+)(.*)$', line):
+        account = getAccountId(rx.match[1])
+        if account is None:
+            print(rx.match[1], 'account not found')
+            return None
+        rest = rx.match[2]
+        hash, index, rest = get_params(rest)
+        strict, rest = get_bool(rest)
+        hotwallet, rest = get_array(rest)
+        request = gateway_balances_request(account, hash, index, strict, hotwallet)
+        res = send_request(request, node, port)
+        print(do_format(pprint.pformat(res['result'])))
+        return True
+    return False
+
+
 
 
 def set_issue(line):
@@ -2515,27 +2606,9 @@ def ledger_data(line):
     rx = Re()
     if rx.search(r'^\s*ledger\s+data\s+(.+)\s*$', line):
         rest = rx.match[1]
-        hash = None
-        index = 'validated'
-        binary = 'false'
-        limit = 5
-        marker = None
         type_ = None
-        if rx.search(r'#([^\s]+)', rest):
-            hash = rx.match[1]
-            rest = re.sub(r'#([^\s]+)', '', rest)
-        if rx.search(r'@([^\s]+)', rest):
-            index = rx.match[1]
-            rest = re.sub(r'@([^\s]+)', '', rest)
-        if rx.search(r'\$([^\s]+)', rest):
-            limit = int(rx.match[1])
-            rest = re.sub(r'\$([^\s]+)', '', rest)
-        if rx.search(r'\%([^\s]+)', rest):
-            binary = rx.match[1]
-            rest = re.sub(r'\%([^\s]+)', '', rest)
-        if rx.search(r'\^([^\s]+)', rest):
-            marker = int(rx.match[1])
-            rest = re.sub(r'\^([^\s]+)', '', rest)
+        hash, index, rest = get_params(rest, 'validated')
+        limit, marker, binary, rest = get_params_ext(rest)
         rest = re.sub(r'\s+', '', rest)
         if rest != '':
             type_ = rest
@@ -2554,33 +2627,14 @@ def account_objects(line):
             print('invalid account', account)
             return None
         rest = rx.match[2]
-        hash = None
-        index = 'validated'
-        delete_only = 'false'
-        limit = 5
-        marker = None
         type_ = None
-        if rx.search(r'#([^\s]+)', rest):
-            hash = rx.match[1]
-            rest = re.sub(r'#([^\s]+)', '', rest)
-        if rx.search(r'@([^\s]+)', rest):
-            index = rx.match[1]
-            rest = re.sub(r'@([^\s]+)', '', rest)
-        if rx.search(r'\$([^\s]+)', rest):
-            limit = int(rx.match[1])
-            rest = re.sub(r'\$([^\s]+)', '', rest)
-        if rx.search(r'\^([^\s]+)', rest):
-            marker = int(rx.match[1])
-            rest = re.sub(r'\^([^\s]+)', '', rest)
-        if rx.search(r'(true|false)', rest):
-            delete_only = rx.match[1]
-            rest = re.sub(r'(true|false)', '', rest)
+        hash, index, rest = get_params(rest, 'validated')
+        limit, marker, delete_only, rest = get_params_ext(rest)
         rest = re.sub(r'\s+', '', rest)
         if rest != '':
             type_ = rest
         req = account_objects_request(account, hash=hash, index=index, limit=limit, marker=marker,
                                       delete_only = delete_only, type_ = type_)
-        print(req)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
         return True
@@ -2636,6 +2690,10 @@ def account_commands(line):
                'delete': account_delete, 'channels': account_channels, 'currencies': account_currencies,
                'nfts': account_nfts, 'tx': account_tx}
         return cmd[rx.match[1]](line)
+    if rx.search(r'^\s*gateway\s+balances', line):
+        return gateway_balances(line)
+    if rx.search(r'^\s*noripple\s+check', line):
+        return noripple_check(line)
     return False
 
 def offer_commands(line):
