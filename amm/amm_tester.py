@@ -317,7 +317,7 @@ class Amount:
     # <amount XRP|IOU
     def nextFromStr(s, with_issuer = False):
         rx = Re()
-        if not rx.search(r'^\s*(\d+(\.\d+)?)\s*(.+)$', s):
+        if not rx.search(r'^\s*([\-]?\d+(\.\d+)?)\s*(.+)$', s):
             return (None, s)
         amount = float(rx.match[1])
         rest = rx.match[3]
@@ -400,6 +400,10 @@ def quoted(val):
 def get_field(field, val, delim=True):
     if val is None:
         return ""
+    elif type(val) == Amount or type(val) == Issue:
+        return """
+        "%s": %s%s
+        """ % (field, val.json(), ',' if delim else '')
     return """
         "%s": %s%s
     """ % (field, json.JSONEncoder().encode(val), ',' if delim else '')
@@ -1205,6 +1209,35 @@ def noripple_check_request(account, role, transactions, limit, hash, index):
     """ % (account, role, get_field('transactions', transactions), get_field('limit', limit),
            get_field('ledger_hash', hash), get_field('ledger_index', index))
 
+
+def path_find_request(src: str, dst: str, dst_amount: Amount, send_max: Amount = None, src_curr: list = None):
+    def get_curr(src_curr):
+        if src_curr is None:
+            return None
+        l = []
+        for curr in src_curr:
+            l.append({"currency": curr});
+        return l
+
+    return """
+    {
+    "method": "ripple_path_find",
+    "params": [
+        {
+            "source_account" : "%s",
+            "destination_account": "%s",
+            %s
+            %s
+            %s
+        }
+    ]
+    }
+    """ % (src, dst,
+           get_field('destination_amount', dst_amount, send_max is not None or src_curr is not None),
+           get_field('send_max', send_max, src_curr is not None),
+           get_field('source_currencies', get_curr(src_curr), False))
+
+
 ### End requests
 
 
@@ -1514,7 +1547,7 @@ def amm_create(line):
                 print('amm create failed', res)
             else:
                 result = res['result']['amm']
-                ammAccount = result['amm_account']
+                ammAccount = result['account']
                 tokens = result['lp_token']
                 accounts[alias] = {'id': ammAccount,
                                    'token1': amt1.issue.json(),
@@ -1555,7 +1588,7 @@ def amm_info(line):
     def do_save(res, alias):
         result = res['result']
         tokens = result['lp_token']
-        accounts[alias] = {'id': result['amm_account'],
+        accounts[alias] = {'id': result['account'],
                            'issue': {'currency': tokens['currency'], 'issuer': tokens['issuer']}}
         dump_accounts()
     rx = Re()
@@ -2731,6 +2764,29 @@ def book_offers(line):
         return True
     return False
 
+# path find src dest dest_amount [send_max] [[currencies]]
+def path_find(line):
+    rx = Re()
+    if rx.search(r'^\s*path\s+find\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)(.*)$', line):
+        src = getAccountId(rx.match[1])
+        if src is None:
+            print('invalid account', rx.match[1])
+            return None
+        dst = getAccountId(rx.match[2])
+        if dst is None:
+            print('invalid account', rx.match[2])
+            return None
+        dst_amount,rest = Amount.nextFromStr(rx.match[3])
+        send_max,rest = Amount.nextFromStr(rx.match[4])
+        src_curr = None
+        if rx.search(r'\[([^\s]+)\]', rest):
+            src_curr = rx.match[1].split(',')
+        request = path_find_request(src, dst, dst_amount, send_max, src_curr)
+        res = send_request(request, node, port)
+        print(do_format(pprint.pformat(res['result'])))
+        return True
+    return False
+
 def account_commands(line):
     rx = Re()
     if rx.search(r'^\s*account\s+(objects|info|lines|offers|SetFlag|ClearFlag|delete|channels|currencies|nfts|tx)', line):
@@ -2761,6 +2817,8 @@ def amm_commands(line):
     return False
 
 
+
+
 commands = [repeat_cmd, fund, faucet_fund, trust_set, account_commands,
             offer_commands, pay, amm_commands,
             session_restore, help, do_history, clear_history, show_accounts, print_account,
@@ -2769,7 +2827,7 @@ commands = [repeat_cmd, fund, faucet_fund, trust_set, account_commands,
             server_info, amm_hash, expect_amm, expect_line,
             expect_offers, expect_balance, wait, run_script, expect_trading_fee,
             expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
-            tx_lookup, server_state, ledger_entry, ledger_data, book_offers, clear_all]
+            tx_lookup, server_state, ledger_entry, ledger_data, book_offers, clear_all, path_find]
 
 def prompt():
     sys.stdout.write('> ')
