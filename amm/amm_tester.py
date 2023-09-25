@@ -58,7 +58,8 @@ validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':26
              'requireAuth': 2, 'requireDest': 1, 'withdrawAll': 0x20, 'noRippleDirect': 65536,
               'LPToken': 0x00010000, 'WithdrawAll': 0x00020000, 'OneAssetWithdrawAll': 0x00040000,
               'SingleAsset': 0x000080000, 'TwoAsset': 0x00100000, 'OneAssetLPToken': 0x00200000,
-              'LimitLPToken': 0x00400000, 'setNoRipple': 0x00020000, 'clearNoRipple': 0x00040000}
+              'LimitLPToken': 0x00400000, 'setNoRipple': 0x00020000, 'clearNoRipple': 0x00040000,
+              'TwoAssetIfEmpty': 0x00800000}
 
 def load_history():
     global history
@@ -691,17 +692,20 @@ Amount and Amount2
 Amount and LPToken
 Amount and EPrice
 '''
-def amm_deposit_request(secret, account, issues, tokens: Amount = None, asset1: Amount = None, asset2: Amount = None, eprice: Amount = None, fee="10"):
+def amm_deposit_request(secret, account, issues, tokens: Amount = None,
+                        asset1: Amount = None, asset2: Amount = None,
+                        eprice: Amount = None, fee="10", empty=False, tfee=1):
     flags = 0
     def fields():
         nonlocal flags
         if asset1 is not None:
             if asset2 is not None:
-                flags = validFlags['TwoAsset']
+                flags = validFlags['TwoAssetIfEmpty'] if empty else validFlags['TwoAsset']
                 return """
                     "Amount": %s,
                     "Amount2": %s,
-                """ % (asset1.json(), asset2.json())
+                    %s
+                """ % (asset1.json(), asset2.json(), get_field('TradingFee', tfee, False))
             if tokens is not None:
                 flags = validFlags['OneAssetLPToken']
                 return """
@@ -1567,7 +1571,7 @@ def amm_info(line):
             amm_account = getAccountId(rx.match[1])
             if amm_account is None:
                 print(rx.match[1], 'not found')
-                return False
+                return None
             account = rx.match[3]
             request = amm_info_request(getAccountId(account), amm_account=amm_account, index=index)
             res = send_request(request, node, port)
@@ -1611,7 +1615,7 @@ def amm_info(line):
 # note: hash is an alias for issue1,issue2
 # amm deposit account hash tokens
 # amm deposit account hash asset1in
-# amm deposit account hash asset1in asset2in
+# amm deposit account hash asset1in asset2in [empty [tfee]]
 # amm deposit account hash asset1in tokens
 # amm deposit account hash asset1in @eprice: Note '@' to distinguish eprice from asset2in
 def amm_deposit(line):
@@ -1632,6 +1636,8 @@ def amm_deposit(line):
         asset1 = None
         asset2 = None
         eprice = None
+        empty = False
+        tfee = None
         # tokens
         if rx.search(r'^\s*(\d+)\s*$', rest):
             tokens = Amount(issue, float(rx.match[1]))
@@ -1657,9 +1663,14 @@ def amm_deposit(line):
                 # amount
                 else:
                     asset2, rest = Amount.nextFromStr(rest)
+                    if rx.search(r'^\s*empty(\s+(\d+))?\s*$', rest):
+                        empty = True
+                        tfee = rx.match[2]
+                        rest = ''
                     if asset2 is None or rest != '':
                         return False
-        request = amm_deposit_request(accounts[account]['seed'], account_id, issues, tokens, asset1, asset2, eprice)
+        request = amm_deposit_request(accounts[account]['seed'], account_id, issues, tokens, asset1, asset2,
+                                      eprice, empty=empty, tfee=tfee)
         res = send_request(request, node, port)
         error(res)
         return True
