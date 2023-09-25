@@ -368,6 +368,9 @@ class Amount:
             return Amount(self.issue, self.value * other)
         raise Exception('can not multiply amounts')
 
+def fix_comma(s: str):
+    return re.sub(',\s*}', '\n}', s)
+
 def send_request(request, node = None, port = '51234'):
     if node == None:
         node = "1"
@@ -404,6 +407,10 @@ def get_field(field, val, delim=True):
         return """
         "%s": %s%s
         """ % (field, val.json(), ',' if delim else '')
+    elif type(val) == str and re.search(r'false|true', val):
+        return """
+        "%s": %s%s
+        """ % (field, val, ',' if delim else '')
     return """
         "%s": %s%s
     """ % (field, json.JSONEncoder().encode(val), ',' if delim else '')
@@ -442,7 +449,7 @@ def get_params_ext(params):
         limit = int(rx.match[1])
         params = re.sub(r'\s*\$[^\s]+', '', params)
     if rx.search(r'(true|false)', params):
-        bool = int(rx.match[1])
+        bool = rx.match[1]
         params = re.sub(r'\s*(true|false)', '', params)
     return (limit, marker, bool, params)
 
@@ -639,7 +646,7 @@ def account_trust_lines_request(account, index='validated'):
     }
     """ % (account, index)
 
-def amm_create_request(secret, account, asset1: Amount, asset2: Amount, tradingFee="0", fee="10"):
+def amm_create_request(secret, account, asset1: Amount, asset2: Amount, tradingFee="1", fee="10"):
     return """
    {
    "method": "submit",
@@ -660,54 +667,22 @@ def amm_create_request(secret, account, asset1: Amount, asset2: Amount, tradingF
    }
    """ % (secret, account, fee, tradingFee, asset1.json(), asset2.json())
 
-def amm_info_request(account, iou1: Issue, iou2: Issue, ledger_index = "validated"):
-    def acct(account):
-        if account is not None:
-            return f'"account": "{account}",'
-        else:
-            return ""
-    def index():
-        if ledger_index != None:
-            return f',\n"ledger_index": "{ledger_index}"'
-        else:
-            return ""
-    return """ {
+def amm_info_request(account, iou1: Issue = None, iou2: Issue = None, amm_account: str = None, index = "validated"):
+   assert (iou1 and iou1) or (amm_account)
+   return fix_comma(""" {
    "method": "amm_info",
    "params": [
        {
            %s
-           "asset" : %s,
-           "asset2" : %s
+           %s
+           %s
+           %s
            %s
        }
    ]
    }
-   """ % (acct(account), iou1.json(), iou2.json(), index())
-
-def amm_info_by_hash_request(account, hash, ledger_index = "validated"):
-    def acct(account):
-        if account is not None:
-            return f'"account": "{account}",'
-        else:
-            return ""
-
-    def index():
-        if ledger_index != None:
-            return f',\n"ledger_index": "{ledger_index}"'
-        else:
-            return ""
-
-    return """ {
-    "method": "amm_info",
-    "params": [
-        {
-            %s
-            "amm_id" : "%s"
-            %s
-        }
-    ]
-    }
-    """ % (acct(account), hash, index())
+   """ % (get_field('account', account), get_field('asset', iou1), get_field('asset2', iou2),
+          get_field('amm_account', amm_account), get_field('ledger_index', index)))
 
 '''
 LPTokenOut
@@ -1133,44 +1108,14 @@ def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
 def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker='None', type_=None):
     if hash is None and index is None:
         index = 'validated'
-    def get_hash():
-        if hash is None:
-            return ""
-        return """
-            "ledger_hash": "%s",
-        """ % (hash)
-    def get_index():
-        if index is None:
-            return ""
-        return """
-            "ledger_index": "%s",
-        """ % (index)
-    def get_marker():
-        if marker is None:
-            return ""
-        return """
-            "marker": %d,
-        """ % (marker)
-    def get_type(delim):
-        if type_ is None:
-            return ""
-        d = "," if delim else ""
-        return """
-            "type": "%s"%s
-        """ % (type_, d)
-    def get_limit():
-        if limit is None:
-            return ""
-        return """
-            "limit": %d
-        """
-    binary = "false" if binary is None else binary
-    return """
+    if binary is None:
+        binary = 'false'
+    return fix_comma("""
     {
     "method": "ledger_data",
     "params": [
         {
-            "binary": %s,
+            %s
             %s
             %s
             %s
@@ -1179,7 +1124,8 @@ def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker
         }
     ]
     }
-    """ % (binary, get_hash(), get_index(), get_marker(), get_type(limit is not None), get_limit())
+    """ % (get_field('binary', binary), get_field('ledger_hash', hash), get_field('ledger_index', index),
+           get_field('marker', marker), get_field('limit', limit), get_field('type', type_)))
 
 def account_objects_request(account, hash=None, index=None, limit='5', marker='None', type_=None, delete_only = 'false'):
     return """
@@ -1548,7 +1494,7 @@ def amm_create(line):
                     del accounts[alias_prev]
             cur = f'{amt1.issue.currency}-{amt2.issue.currency}'
             verbose = False
-            request = amm_info_request(None, amt1.issue, amt2.issue, 'validated')
+            request = amm_info_request(None, amt1.issue, amt2.issue, index='validated')
             res = send_request(request, node, port)
             verbose = verboseSave
             if 'result' not in res or 'amm' not in res['result']:
@@ -1589,8 +1535,8 @@ def getAMMIssue(s) -> Issue :
             return Issue(issue['currency'], issue['issuer'])
     return None
 
-# amm info currency1 currency2 [account] [\[Amount,Amount2...\]] [$ledger]
-# amm info hash [account] [\[Amount,Amount2...\]] [$ledger]
+# can pass either the asset pair or the amm account
+# amm info [currency1 currency2] [amm_account] [account] [\[Amount,Amount2...\]] [$ledger] [save key]
 def amm_info(line):
     global accounts
     def do_save(res, alias):
@@ -1612,16 +1558,18 @@ def amm_info(line):
     if rx.search(r'^\s*amm\s+info\s+(.+)$', line):
         rest = rx.match[1]
         fields = None
+        # match array of the amm fields
         if rx.search(r'\s+\[([^\s+]+)\]', rest):
             fields = rx.match[1].split(',')
             rest = re.sub(r'\s+\[([^\s+]+)\]', '', rest)
+        # match amm account
         if rx.search(r'^\s*([^\s]+)(\s+([^\s]+))?\s*$', rest) and not_currency(rx.match[1]):
-            issues = getAMMIssues(rx.match[1])
-            if issues is None:
+            amm_account = getAccountId(rx.match[1])
+            if amm_account is None:
                 print(rx.match[1], 'not found')
                 return False
             account = rx.match[3]
-            request = amm_info_request(getAccountId(account), issues[0], issues[1], index)
+            request = amm_info_request(getAccountId(account), amm_account=amm_account, index=index)
             res = send_request(request, node, port)
             if fields is not None:
                 for field in fields:
@@ -1647,7 +1595,7 @@ def amm_info(line):
             request = amm_info_request(getAccountId(account),
                                        iou1,
                                        iou2,
-                                       index)
+                                       index=index)
             res = send_request(request, node, port)
             if fields is not None:
                 for field in fields:
@@ -2293,7 +2241,7 @@ def expect_amm(line):
         lpToken = None
         if token is not None:
             lpToken = token
-        request = amm_info_request(None, amToken1.issue, amToken2.issue, 'validated')
+        request = amm_info_request(None, amToken1.issue, amToken2.issue, index='validated')
         res = send_request(request, node, port)
         if 'error' in res['result'] or not 'amm' in res['result']:
             raise Exception(f'{line.rstrip()}: {res["result"]["error"]}')
@@ -2320,7 +2268,7 @@ def expect_amm(line):
         if issues == rx.match[1]:
             print(rx.match[1], 'tokens not found')
             return None
-        request = amm_info_request(None, issues[0], issues[1], 'validated')
+        request = amm_info_request(None, issues[0], issues[1], index='validated')
         res = send_request(request, node, port)
         if res['result']['error'] != 'actNotFound':
             raise Exception(f'{line.rstrip()}: ##FAILED## {res}')
@@ -2341,7 +2289,7 @@ def expect_amm(line):
             if tokens is None:
                 print('tokens must be specified')
                 return None
-            request = amm_info_request(account_id, issues[0], issues[1], 'validated')
+            request = amm_info_request(account_id, issues[0], issues[1], index='validated')
             res = send_request(request, node, port)
             if tokens != res['result']['amm']['lp_token']['value']:
                 raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["LPToken"]["value"]}')
@@ -2359,7 +2307,7 @@ def expect_trading_fee(line):
             print(rx.match[1], 'tokens not found')
             return None
         fee = rx.match[2]
-        request = amm_info_request(None, issues[0], issues[1], 'validated')
+        request = amm_info_request(None, issues[0], issues[1], index='validated')
         res = send_request(request, node, port)
         if res['result']['amm']['trading_fee'] != int(fee):
             raise Exception(f'{line.rstrip()}: ##FAILED## {res["result"]["amm"]["trading_fee"]}')
@@ -2546,7 +2494,7 @@ def expect_auction(line):
         fee = int(rx.match[2])
         interval = int(rx.match[3])
         price = rx.match[4]
-        request = amm_info_request(None, issues[0], issues[1], 'validated')
+        request = amm_info_request(None, issues[0], issues[1], index='validated')
         res = send_request(request, node, port)
         slot = res['result']['amm']['auction_slot']
         efee = slot['discounted_fee']
