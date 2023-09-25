@@ -488,7 +488,7 @@ def accountset_request(secret: str, account: str, t: str, flags: str, fee="10"):
 
 def account_delete_request(secret: str, account: str, destination: str, tag: str = None, fee="10", flags=0):
     return """
-       { 
+       {
         "method": "submit",
         "params": [
             {
@@ -503,7 +503,7 @@ def account_delete_request(secret: str, account: str, destination: str, tag: str
                 }
             }
         ]
-        } 
+        }
     """ % (secret, account, destination, get_field('DestinationTag', tag), fee, flags)
 
 """
@@ -1110,7 +1110,7 @@ def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
             {
             "amm": "%s",
             "ledger_index": "%s"
-            } 
+            }
           ]
         }
         """ % (id, index)
@@ -1125,7 +1125,7 @@ def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
               "asset2": %s
             },
             "ledger_index": "%s"
-            } 
+            }
           ]
         }
         """ % (asset.json(), asset2.json(), index)
@@ -1151,12 +1151,20 @@ def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker
         return """
             "marker": %d,
         """ % (marker)
-    def get_type():
+    def get_type(delim):
         if type_ is None:
             return ""
+        d = "," if delim else ""
         return """
-            "type": "%s",
-        """ % (type_)
+            "type": "%s"%s
+        """ % (type_, d)
+    def get_limit():
+        if limit is None:
+            return ""
+        return """
+            "limit": %d
+        """
+    binary = "false" if binary is None else binary
     return """
     {
     "method": "ledger_data",
@@ -1167,11 +1175,11 @@ def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker
             %s
             %s
             %s
-            "limit": %d
+            %s
         }
     ]
     }
-    """ % (binary, get_hash(), get_index(), get_marker(), get_type(), limit)
+    """ % (binary, get_hash(), get_index(), get_marker(), get_type(limit is not None), get_limit())
 
 def account_objects_request(account, hash=None, index=None, limit='5', marker='None', type_=None, delete_only = 'false'):
     return """
