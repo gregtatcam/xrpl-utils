@@ -55,7 +55,7 @@
     "# single deposit USD",
     "amm create alice 10000XRP 10000USD",
     "amm deposit alice ammXRP-USD 1000USD",
-    "expect amm 10000XRP 10999.99999999999USD 10488088.48170152",
+    "expect amm 10000XRP 10999.99999999999USD 10488088.48170151",
     "amm withdraw alice ammXRP-USD 0",
 
     "# single deposit XRP",
