@@ -401,20 +401,25 @@ def quoted(val):
         return f'"%s"' % val
     return str(val)
 
-def get_field(field, val, delim=True):
+def get_field(field, val, delim=True, asis=False):
+    d = ',' if delim else ''
     if val is None:
         return ""
+    elif asis:
+        return """
+        "%s": %s%s
+        """ % (field, val, d)
     elif type(val) == Amount or type(val) == Issue:
         return """
         "%s": %s%s
-        """ % (field, val.json(), ',' if delim else '')
+        """ % (field, val.json(), d)
     elif type(val) == str and re.search(r'false|true', val):
         return """
         "%s": %s%s
-        """ % (field, val, ',' if delim else '')
+        """ % (field, val, d)
     return """
         "%s": %s%s
-    """ % (field, json.JSONEncoder().encode(val), ',' if delim else '')
+    """ % (field, json.JSONEncoder().encode(val), d)
 
 def get_with_prefix(prefix, params):
     rx = Re()
@@ -546,18 +551,10 @@ def account_delete_request(secret: str, account: str, destination: str, tag: str
 """
 
 def payment_request(secret, account, destination, amount: Amount,
-                    paths = None,
+                    paths: str = None,
                     sendMax: Amount = None,
                     fee = "10", flags = "2147483648"):
-    def path_(paths):
-        if paths is not None:
-            return f',"Paths": {json.dumps(paths)}'
-        return ""
-    def sendmax_(sendMax):
-        if sendMax is not None:
-            return f',"SendMax": {sendMax.json()}'
-        return ""
-    return """
+    return fix_comma("""
     {
     "method": "submit",
     "params": [
@@ -569,14 +566,15 @@ def payment_request(secret, account, destination, amount: Amount,
                 "Destination": "%s",
                 "TransactionType": "Payment",
                 "Fee": "%s",
-                "Flags": "%s"
+                "Flags": "%s",
                 %s
                 %s
             }
         }
     ]
     }
-    """ % (secret, account, amount.json(), destination, fee, flags, sendmax_(sendMax), path_(paths))
+    """ % (secret, account, amount.json(), destination, fee, flags,
+           get_field('SendMax', sendMax), get_field('Paths', json.dumps(paths), asis=True)))
 
 def wallet_request():
     return """
@@ -1387,7 +1385,11 @@ def account_lines(line):
         return True
     return False
 
-# pay src dst[,dst1,...] amount currency [sendmax [path1,path2...]]
+# pay src dst[,dst1,...] amount currency [[path1,path2...] sendmax]
+# path is [currency,...,currencyX]
+# pay carol bob 100USD [[XRP,USD]] 120XRP
+# path must be included for cross-currency, path could be empty if default; i.e. []
+# pay carol bob 100USD [] 120XRP
 def pay(line):
     global accounts
     rx = Re()
@@ -1415,7 +1417,7 @@ def pay(line):
             paths = None
             sendmax = None
             flags = "2147483648"
-            if rx.search(r'^\s*([^\s]+)\s+([^\s]+)(.*)?$', rest):
+            if rx.search(r'^\s*(\[[^\s]*\])\s+([^\s]+)(.*)?$', rest):
                 paths = None if rx.match[1] == '[]' else getPaths(rx.match[1])
                 if paths == []:
                     print('invalid paths')
