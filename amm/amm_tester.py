@@ -807,36 +807,6 @@ def amm_withdraw_request(secret, account, issues, tokens: Amount = None, asset1:
     """ % (secret, account, issues[0].json(), issues[1].json(), fee, fields(), flags)
 
 
-def amm_swap_request(secret, account, hash, dir, asset: Amount, assetLimit: Amount = None, splimit = None, slippage = None, fee = "10"):
-    def fields():
-        if dir == 'in':
-            return f'"AssetIn": {asset.json()},'
-        elif dir == 'out':
-            return f'"AssetOut": {asset.json()},'
-        elif assetLimit is not None:
-            return """
-                "Asset": %s,
-                "AssetLimit": %s,
-            """ % (asset.json(), assetLimit.json())
-    return """
-    {
-    "method": "submit",
-    "params": [
-        {
-             "secret": "%s",
-             "tx_json": {
-                 "Flags": 0,
-                 "Account" : "%s",
-                 "AMMID" : "%s",
-                 "Fee": "%s",
-                 %s
-                 "TransactionType" : "AMMSwap"
-             }
-        }
-    ]
-    }
-    """ % (secret, account, hash, fee, fields())
-
 def offer_request(secret, account, takerPays: Amount, takerGets: Amount, flags=0, fee="10"):
     return """
     {
@@ -1733,34 +1703,6 @@ def amm_withdraw(line):
         return True
     return False
 
-# swap [in|out] acct ammAcct amount
-# swap acct ammAcct asset assetLimit
-def amm_swap(line):
-    rx = Re()
-    if rx.search(r'^\s*amm\s+swap\s+((in|out)\s+)?([^\s]+)\s+([^\s]+)\s+(.+)$', line):
-        dir = rx.match[2]
-        account = rx.match[3]
-        account_id = getAccountId(account)
-        if account_id is None:
-            print(rx.match[3], 'account not found')
-            return False
-        hash = getAMMHash(rx.match[4])
-        if hash is None:
-            print(rx.match[4], 'hash not found')
-            return False
-        asset,rest = Amount.nextFromStr(rx.match[5])
-        if asset == None:
-            return False
-        assetLimit = None
-        if dir is None:
-            assetLimit = Amount.fromStr(rest)
-        elif not rx.search(r'^\s*$', rest):
-            return False
-        request = amm_swap_request(accounts[account]['seed'], account_id, hash, dir, asset, assetLimit)
-        res = send_request(request, node, port)
-        error(res)
-        return True
-    return False
 
 # offer create acct takerPaysAmt [gw] takerGetsAmt [gw]
 def offer_create(line):
@@ -2782,10 +2724,9 @@ def offer_commands(line):
 
 def amm_commands(line):
     rx = Re()
-    if rx.search(r'^\s*amm\s+(create|deposit|withdraw|swap|vote|bid|info|hash)', line):
+    if rx.search(r'^\s*amm\s+(create|deposit|withdraw|vote|bid|info|hash)', line):
         cmd = {'create': amm_create, 'deposit': amm_deposit, 'withdraw': amm_withdraw,
-               'swap': amm_swap, 'vote': amm_vote, 'bid': amm_bid, 'info': amm_info,
-               'hash': amm_hash}
+               'vote': amm_vote, 'bid': amm_bid, 'info': amm_info, 'hash': amm_hash}
         return cmd[rx.match[1]](line)
     return False
 
