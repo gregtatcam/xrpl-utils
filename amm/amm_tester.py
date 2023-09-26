@@ -554,6 +554,7 @@ def payment_request(secret, account, destination, amount: Amount,
                     paths: str = None,
                     sendMax: Amount = None,
                     fee = "10", flags = "2147483648"):
+    paths = None if paths is None else json.dumps(paths)
     return fix_comma("""
     {
     "method": "submit",
@@ -574,7 +575,7 @@ def payment_request(secret, account, destination, amount: Amount,
     ]
     }
     """ % (secret, account, amount.json(), destination, fee, flags,
-           get_field('SendMax', sendMax), get_field('Paths', json.dumps(paths), asis=True)))
+           get_field('SendMax', sendMax), get_field('Paths', paths, asis=True)))
 
 def wallet_request():
     return """
