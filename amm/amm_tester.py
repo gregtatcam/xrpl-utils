@@ -2549,6 +2549,8 @@ def server_state(line):
         return True
     return False
 
+# only gets "amm" object, more general ledger_entry would require separate
+# command for each type
 # ledger entry XRP USD | object_id
 def ledger_entry(line):
     rx = Re()
@@ -2569,7 +2571,6 @@ def ledger_entry(line):
         if asset2 is None:
             print('Invalid asset', asset2)
             return None
-        print('call ledger entry')
         req = ledger_entry_request(asset=asset, asset2=asset2)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
@@ -2587,7 +2588,7 @@ def ledger_data(line):
         rest = re.sub(r'\s+', '', rest)
         if rest != '':
             type_ = rest
-        req = ledger_data_request(hash=hash, index=index, limit=limit, binary=binary, marker=marker, type_ = type_)
+        req = ledger_data_request(hash=hash, index=index, limit=limit, binary=binary, marker=marker, type_=type_)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
         return True
