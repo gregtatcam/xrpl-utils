@@ -1231,7 +1231,7 @@ def faucet_fund1(name, req_XRP: int):
         accounts[name] = {'id': src_acct, 'seed': src_secret}
     return (src_acct, src_secret)
 
-# fund account[,account1,...] XRP: fund via ammdevnet faucet
+# fund account[,account1,...] N XRP: fund via ammdevnet faucet
 def faucet_fund(line):
     rx = Re()
     global accounts
@@ -2777,24 +2777,58 @@ def offer_commands(line):
 
 def amm_commands(line):
     rx = Re()
-    if rx.search(r'^\s*amm\s+(create|deposit|withdraw|swap|vote|bid|info)', line):
+    if rx.search(r'^\s*amm\s+(create|deposit|withdraw|swap|vote|bid|info|hash)', line):
         cmd = {'create': amm_create, 'deposit': amm_deposit, 'withdraw': amm_withdraw,
-               'swap': amm_swap, 'vote': amm_vote, 'bid': amm_bid, 'info': amm_info}
+               'swap': amm_swap, 'vote': amm_vote, 'bid': amm_bid, 'info': amm_info,
+               'hash': amm_hash}
         return cmd[rx.match[1]](line)
     return False
 
 
-
-
-commands = [repeat_cmd, fund, faucet_fund, trust_set, account_commands,
-            offer_commands, pay, amm_commands,
-            session_restore, help, do_history, clear_history, show_accounts, print_account,
-            show_issuers, toggle_verbose, last, set_node,
-            set_account, set_issue, flags, load_accounts,
-            server_info, amm_hash, expect_amm, expect_line,
-            expect_offers, expect_balance, wait, run_script, expect_trading_fee,
-            expect_auction, get_line, get_balance, set_wait, clear_store, toggle_pprint,
-            tx_lookup, server_state, ledger_entry, ledger_data, book_offers, clear_all, path_find]
+commands = {
+    'account': account_commands,
+    'accounts': show_accounts,
+    'amm': amm_commands,
+    'book': book_offers,
+    'clearall': clear_all,
+    'clearhistory': clear_history,
+    'clearstore': clear_store,
+    'expectamm': expect_amm,
+    'expectauction': expect_auction,
+    'expectbalance': expect_balance,
+    'expectfee': expect_trading_fee,
+    'expectline': expect_line,
+    'expectoffers': expect_offers,
+    'flags': flags,
+    'fund': fund,
+    'getbalance': get_balance,
+    'getline': get_line,
+    'help': help,
+    'history': history,
+    'h': history,
+    'issuers': show_issuers,
+    'last': last,
+    'ledgerentry': ledger_entry,
+    'ledgerdata': ledger_data,
+    'load': load_accounts,
+    'offer': offer_commands,
+    'path': path_find,
+    'pay': pay,
+    'pprint': toggle_pprint,
+    'repeat': repeat_cmd,
+    'run': run_script,
+    'session': session_restore,
+    'serverinfo': server_info,
+    'serverstate': server_state,
+    'setaccount': set_account,
+    'setissue': set_issue,
+    'setnode': set_node,
+    'setwait': set_wait,
+    'trust': trust_set,
+    'tx': tx_lookup,
+    'verbose': toggle_verbose,
+    'wait': wait
+}
 
 def prompt():
     sys.stdout.write('> ')
@@ -2806,15 +2840,21 @@ def exec_command(line):
         return
     global commands
     res = None
-    for command in commands:
+
+    if rx.search(r'^\s*([^\s]+)(\s+([^\s]+))?', line):
+        k1 = rx.match[1]
+        k2 = (k1 + rx.match[3]) if rx.match[3] is not None else None
         try:
-            res = command(line)
+            if k1 in commands:
+                res = commands[k1](line)
+            elif k2 is None:
+                res = print_account(line)
+            elif k2 in commands:
+                res = commands[k2](line)
         except Exception as ex:
-            print(command, ex)
+            print(line, ex)
             res = None
-            break
-        if res is None or res:
-            break
+
     if res is not None and res:
         history.append(line.strip('\n'))
         with open('history.json', 'w') as f:
