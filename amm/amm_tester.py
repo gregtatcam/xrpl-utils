@@ -1827,7 +1827,10 @@ def account_offers(line):
             if id is None:
                 print(account, 'account not found')
                 return None
-            hash, index = get_params(rx.match[2])
+            hash, index, rest = get_params(rx.match[2])
+            if rest != '':
+                print('invalid command', rest)
+                return None
             request = account_offers_request(id, hash, index)
             res = send_request(request, node, port)
             print(do_format(pprint.pformat(res['result'])))
