@@ -1101,6 +1101,10 @@ def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker
            get_field('marker', marker), get_field('limit', limit), get_field('type', type_)))
 
 def account_objects_request(account, hash=None, index=None, limit='5', marker='None', type_=None, delete_only = 'false'):
+    if delete_only is None:
+        delete_only = 'false'
+    if limit is None:
+        limit = 5
     return """
     {
     "method": "account_objects",
@@ -1798,30 +1802,6 @@ def session_restore(line):
                     return True
         except:
             pass
-        return True
-    return False
-
-# show available commands
-def help(line):
-    rx = Re()
-    if rx.search(r'^\s*help\s*$', line):
-        print('fund name[,name1,...] <XRP amount>: create account by funding from genesis')
-        print('trust set account amount currency issuer: create trust line')
-        print('pay src dst[,dst1,...] <amount> currency: pay from source into destinations')
-        print('account lines name: print account trust lines')
-        print('account info name: get account info')
-        print('name: print account id and master seed')
-        print(
-            'amm create account[(amm alias)] amount1 currency1 amount2 currency2 [trading fee]: create amm for the given tokens')
-        print('amm deposit account amm [tokens | amount1 [tokens|amount2]]: deposit into amm instance')
-        print('amm withdraw account amm [tokens | amount1 [tokens|amount2]]: withdraw from amm instance')
-        print('amm info currency1 currency2 [account]')
-        print('session restore : load previously created accounts (accounts might be unfunded')
-        print('history [n-[n1]]: print all history or replay history n-n1')
-        print('clear history: clear history')
-        print('accounts: show all accounts')
-        print('issuers: show all currencies/issuers')
-        print('offer create account takerGetsAmount takerPaysAmount: create order book offer')
         return True
     return False
 
@@ -2598,7 +2578,7 @@ def ledger_data(line):
 # account objects account [#hash] [@index] [$limit] [^maker] [delete_only] [type]
 def account_objects(line):
     rx = Re()
-    if rx.search(r'^\s*account\s+objects\s+([^\s]+)(.+)\s*$', line):
+    if rx.search(r'^\s*account\s+objects\s+([^\s]+)(.*)\s*$', line):
         account = getAccountId(rx.match[1])
         if account is None:
             print(rx.match[1], 'account not found')
@@ -2703,79 +2683,144 @@ def path_find(line):
         return True
     return False
 
-def account_commands(line):
+
+commands = {}
+account_commands = {}
+amm_commands = {}
+offer_commands = {}
+
+# show available commands
+def help(line):
+    rx = Re()
+    if rx.search(r'^\s*help(\s+([^\s]+)(\s+([^\s]+))?)?\s*$', line):
+        if rx.match[1] is None:
+            for k,c in commands.items():
+                print(c[1])
+        elif rx.match[2] is not None and rx.match[4] is not None:
+            k1 = rx.match[2]
+            k2 = rx.match[4]
+            k = k1 + k2
+            if k in commands:
+                print(commands[k][1])
+            elif k1 in commands:
+                if k2 in account_commands:
+                    print(account_commands[k2][1])
+                elif k2 in amm_commands:
+                    print(amm_commands[k2][1])
+                elif k2 in offer_commands:
+                    print(offer_commands[k2][1])
+                else:
+                    print("can't find:", line)
+                    return None
+            else:
+                print("can't find:", line)
+                return None
+        elif rx.match[2] is not None and rx.match[2] in commands:
+            print(commands[rx.match[2]][1])
+        else:
+            print("can't find:", line)
+            return None
+    return True
+
+
+account_commands = {'ClearFlag': [account_set, "account ClearFlag acct1,... [flags]: set flag"],
+                    'channels': [account_channels, "account channels account #hash @index: account channels"],
+                    'currencies': [account_currencies, "account currencies account strict #hash @index: account currencies"],
+                    'delete': [account_delete, "account delete acct destacct [tag]: delete account"],
+                    'info': [account_info, "account info acct: account info"],
+                    'lines': [account_lines, "account lines acct [[cur1,...]]: account lines for the currencies(optional)"],
+                    'nfts': [account_nfts, "account nfts acct #hash @index: account nfts"],
+                    'objects': [account_objects, "account objects acct: account objects"],
+                    'offers': [account_offers, "account offers acct #hash @index: account offers"],
+                    'SetFlag': [account_set, "account SetFlags acct1,... [flags]"],
+                    'tx': [account_tx, "tx txid: lookup transaction"]}
+offer_commands = {'create': [offer_create, "offer create acct takerPaysAmt [gw] takerGetsAmt [gw]: offer create"],
+                  'cancel': [offer_cancel, "offer cancel acct [seq1,...]: cancel all offers or specific offer seq"]}
+amm_commands = {'bid': [amm_bid, "amm bid lp hash (min|max) price [acct1,acct2]: amm bid by lp to amm hash"],
+                'create': [amm_create, "amm create [@alias] account currency currency [trading fee]: amm create. can assign alias, which can be used in other commands requiring amm account or amm issue. if alias is not specified then the default name is ammCUR1-CUR2"],
+                'deposit': [amm_deposit, """
+                amm deposit account alias tokens
+                amm deposit account alias asset1in
+                amm deposit account alias asset1in asset2in [empty [tfee]]
+                amm deposit account alias asset1in tokens
+                amm deposit account alias asset1in @eprice: amm deposit options, alias is an alias for issue1, issue2 from amm create.
+                """],
+                'hash': [amm_hash, "amm hash alias: get amm hash, this is internal command"],
+                'info': [amm_info, "amm info [currency1 currency2] [alias] [account] [\[Amount,Amount2...\]] [$ledger] [save key]: amm info either by token pair of amm alias. can specify the fields to display. can save into internal storage."],
+                'withdraw': [amm_withdraw, """
+                amm withdraw account alias tokens
+                amm withdraw account alias asset1in
+                amm withdraw account alias asset1in asset2in
+                amm withdraw account alias asset1in tokens
+                amm withdraw account alias asset1in @eprice: amm withdraw options, alias is an alias for issue1, issue2 from amm create.
+                """],
+                'vote': [amm_vote, "amm vote lp alias feevalue: amm vote"]}
+
+
+def account_commands_(line):
     rx = Re()
     if rx.search(r'^\s*account\s+(objects|info|lines|offers|SetFlag|ClearFlag|delete|channels|currencies|nfts|tx)', line):
-        cmd = {'objects': account_objects, 'info': account_info, 'lines': account_lines,
-               'offers': account_offers, 'SetFlag': account_set, 'ClearFlag': account_set,
-               'delete': account_delete, 'channels': account_channels, 'currencies': account_currencies,
-               'nfts': account_nfts, 'tx': account_tx}
-        return cmd[rx.match[1]](line)
+        return account_commands[rx.match[1]][0](line)
     if rx.search(r'^\s*gateway\s+balances', line):
         return gateway_balances(line)
     if rx.search(r'^\s*noripple\s+check', line):
         return noripple_check(line)
     return False
 
-def offer_commands(line):
+def offer_commands_(line):
     rx = Re()
     if rx.search(r'^\s*offer\s+(create|cancel)', line):
-        cmd = {'create': offer_create, 'cancel': offer_cancel}
-        return cmd[rx.match[1]](line)
+        return offer_commands[rx.match[1]][0](line)
     return False
 
-def amm_commands(line):
+def amm_commands_(line):
     rx = Re()
     if rx.search(r'^\s*amm\s+(create|deposit|withdraw|vote|bid|info|hash)', line):
-        cmd = {'create': amm_create, 'deposit': amm_deposit, 'withdraw': amm_withdraw,
-               'vote': amm_vote, 'bid': amm_bid, 'info': amm_info, 'hash': amm_hash}
-        return cmd[rx.match[1]](line)
+        return amm_commands[rx.match[1]][0](line)
     return False
 
-
 commands = {
-    'account': account_commands,
-    'accounts': show_accounts,
-    'amm': amm_commands,
-    'book': book_offers,
-    'clearall': clear_all,
-    'clearhistory': clear_history,
-    'clearstore': clear_store,
-    'expectamm': expect_amm,
-    'expectauction': expect_auction,
-    'expectbalance': expect_balance,
-    'expectfee': expect_trading_fee,
-    'expectline': expect_line,
-    'expectoffers': expect_offers,
-    'flags': flags,
-    'fund': fund,
-    'getbalance': get_balance,
-    'getline': get_line,
-    'help': help,
-    'history': history,
-    'h': history,
-    'issuers': show_issuers,
-    'last': last,
-    'ledgerentry': ledger_entry,
-    'ledgerdata': ledger_data,
-    'load': load_accounts,
-    'offer': offer_commands,
-    'path': path_find,
-    'pay': pay,
-    'pprint': toggle_pprint,
-    'repeat': repeat_cmd,
-    'run': run_script,
-    'session': session_restore,
-    'serverinfo': server_info,
-    'serverstate': server_state,
-    'setaccount': set_account,
-    'setissue': set_issue,
-    'setnode': set_node,
-    'setwait': set_wait,
-    'trust': trust_set,
-    'tx': tx_lookup,
-    'verbose': toggle_verbose,
-    'wait': wait
+    'account': [account_commands_, "account [objects|info|lines|offers|SetFlag|delete|channels|currencies|nfts|tx]: account commands, type account command to get specific help"],
+    'accounts': [show_accounts, "accounts [a1,a2,...,aN]: output all or specified accounts"],
+    'amm': [amm_commands_, "amm [create|deposit|withdraw|vote|bid|info|hash]: amm commands, type amm command to get specific help"],
+    'book': [book_offers, "book offers taker_pays [gw] taker_gets [gw] [limit] [[field1,field2,...]]: book offers"],
+    'clearall': [clear_all, "clear all: clears internal data"],
+    'clearhistory': [clear_history, "clear history: clear all history"],
+    'clearstore': [clear_store, "clear store: clear internal saved variables"],
+    'expectamm': [expect_amm, "expect amm token1 token2 [lptoken]: outputs an error if amm balances don't match"],
+    'expectauction': [expect_auction, "expect auction ammAccount fee timeInterval price: outputs an error if amm auction slot params don't match"],
+    'expectbalance': [expect_balance, "expect account balance: outputs an error if account root balance doesn't match"],
+    'expectfee': [expect_trading_fee, "expect fee ammAccount fee: outputs an error if trading fee doesn't match"],
+    'expectline': [expect_line, "expect line account amount: outputs an error if account's line balance doesn't match"],
+    'expectoffers': [expect_offers, "expect offers account {takerPays, takerGets}, {takerPays1, takerGets}: outputs an error if account's offers don't match"],
+    'flags': [flags, "flags: output valid flags"],
+    'fund': [fund, "fund account[,account1,...] XRP: call wallet_create and pay from genesis into accounts"],
+    'getbalance': [get_balance, "get account balance account var: get account balance and save into store[var]"],
+    'getline': [get_line, "get line account currency var: get account line and save into store[var]"],
+    'help': [help, "help [command1 [command2]]: output help, include command's one or two keys to get specific help"],
+    'history': [do_history, "history [n1[-n2]]: get the history of commands, if command number or range is included then execute these commands"],
+    'h': [history, "history [n1[-n2]]: get the history of commands, if command number or range is included then execute these commands"],
+    'issuers': [show_issuers, "issuers: show issuer accounts"],
+    'last': [last, "last: execute last history command"],
+    'ledgerentry': [ledger_entry, "ledger entry [token token2|AMM objectid]: get amm object by token/token2 or ammid"],
+    'ledgerdata': [ledger_data, "ledger data [#hash-ledger hash] [@index-ledger index] [$limit-number of objects] [%binary-true|false] [^marker-marker] [type-object type]: get ledger data"],
+    'load': [load_accounts, "load accounts file name: loads accounts from json file as nameI, when I is the count"],
+    'offer': [offer_commands_, "offer [create|cancel]: offer commands, type offer command to get specific help"],
+    'path': [path_find, "path find src dest dest_amount [send_max] [[cur1,..]]: call path find"],
+    'pay': [pay, "pay src dst[,dst1,...] amount currency [[path1,path2...] sendmax]: send a payment, specify [] for default path"],
+    'pprint': [toggle_pprint, "pprint on|off: user friendly print"],
+    'repeat': [repeat_cmd, "repeat start end+1 cmd: repeat any valid command, for instance: repeat 1 3 trust set (100*$i)A$2i gw. results in three commands: trust set 100A01 gw, ..."],
+    'run': [run_script, "run file: executes json commands from the file."],
+    'session': [session_restore, "session restore: restores accounts from the previous session. this command is always called on start."],
+    'serverinfo': [server_info, "server info: call server_info"],
+    'serverstate': [server_state, "server state: call server_state"],
+    'setaccount': [set_account, "set account name id seed: manually sets the account"],
+    'setissue': [set_issue, "set issue issuer currency: mantually sets the issue"],
+    'setnode': [set_node, "set node node:port: sets the node to connect to"],
+    'setwait': [set_wait, "set wait t: sets the wait between transactions to t seconds"],
+    'trust': [trust_set, "trust set account,account1,.. amount currency issuer [flags]: set the trust"],
+    'verbose': [toggle_verbose, "verbose on|off: prints json load"],
+    'wait': [wait, "wait t: wait t seconds"]
 }
 
 def prompt():
@@ -2794,11 +2839,11 @@ def exec_command(line):
         k2 = (k1 + rx.match[3]) if rx.match[3] is not None else None
         try:
             if k1 in commands:
-                res = commands[k1](line)
+                res = commands[k1][0](line)
             elif k2 is None:
                 res = print_account(line)
             elif k2 in commands:
-                res = commands[k2](line)
+                res = commands[k2][0](line)
         except Exception as ex:
             print(line, ex)
             res = None
@@ -2807,8 +2852,8 @@ def exec_command(line):
         history.append(line.strip('\n'))
         with open('history.json', 'w') as f:
             json.dump(history, f)
-    elif res is not None:
-        print('invalid command')
+    else:
+        print('invalid command:', line)
 
 if __name__ == "__main__":
     if script is not None:
