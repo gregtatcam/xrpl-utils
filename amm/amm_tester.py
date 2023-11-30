@@ -1441,11 +1441,11 @@ def amm_create(line):
         if not getAccountId(account):
             print(account, 'account not found')
             return None
-        (amt1, rest) = Amount.nextFromStr(rest)
+        (amt1, rest) = Amount.nextFromStr(rest, True)
         if amt1 is None:
             print('invalid amount')
             return None
-        (amt2, rest) = Amount.nextFromStr(rest)
+        (amt2, rest) = Amount.nextFromStr(rest, True)
         if amt2 is None:
             print('invalid amount')
             return None
@@ -1824,8 +1824,7 @@ def do_history(line):
             for i in range(start, end+1):
                 print(history[i])
                 exec_command(history[i])
-        return None
-    return False
+    return True
 
 def clear_history(line):
     global history
@@ -2799,7 +2798,7 @@ commands = {
     'getline': [get_line, "get line account currency var: get account line and save into store[var]"],
     'help': [help, "help [command1 [command2]]: output help, include command's one or two keys to get specific help"],
     'history': [do_history, "history [n1[-n2]]: get the history of commands, if command number or range is included then execute these commands"],
-    'h': [history, "history [n1[-n2]]: get the history of commands, if command number or range is included then execute these commands"],
+    'h': [do_history, "history [n1[-n2]]: get the history of commands, if command number or range is included then execute these commands"],
     'issuers': [show_issuers, "issuers: show issuer accounts"],
     'last': [last, "last: execute last history command"],
     'ledgerentry': [ledger_entry, "ledger entry [token token2|AMM objectid]: get amm object by token/token2 or ammid"],
@@ -2815,7 +2814,7 @@ commands = {
     'serverinfo': [server_info, "server info: call server_info"],
     'serverstate': [server_state, "server state: call server_state"],
     'setaccount': [set_account, "set account name id seed: manually sets the account"],
-    'setissue': [set_issue, "set issue issuer currency: mantually sets the issue"],
+    'setissue': [set_issue, "set issue currency issuer: mantually sets the issue"],
     'setnode': [set_node, "set node node:port: sets the node to connect to"],
     'setwait': [set_wait, "set wait t: sets the wait between transactions to t seconds"],
     'trust': [trust_set, "trust set account,account1,.. amount currency issuer [flags]: set the trust"],
