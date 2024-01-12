@@ -388,6 +388,8 @@ def send_request(request, node = None, port = '51234'):
     if res.status_code != 200:
         raise Exception(res.text)
     j = json.loads(request)
+    if verbose and 'method' in j and j['method'] == 'submit':
+        print(res.text)
     if 'method' in j and j['method'] == 'submit':
         if j['params'][0]['tx_json']['TransactionType'] == 'AMMCreate':
             time.sleep(6)
@@ -2647,6 +2649,7 @@ def ledger_entry(line):
         req = ledger_entry_oracle_request(accounts[account]['id'], id, index, hash)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
+        return True
     # ledger entry object_id
     elif rx.search(r'^\s*ledger\s+entry\s+amm\s+([^\s]+)\s*$', line):
         id = rx.match[1]
@@ -2806,7 +2809,6 @@ def oracle_set(line):
             data_series.append(data.split(' '))
         request = oracle_set_request(accounts[account]['seed'], accounts[account]['id'], id, data_series)
         res = send_request(request, node, port)
-        print(res)
         error(res)
         return True
     return False
