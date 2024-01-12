@@ -403,25 +403,34 @@ def quoted(val):
         return f'"%s"' % val
     return str(val)
 
-def get_field(field, val, delim=True, asis=False):
-    d = ',' if delim else ''
+def get_field(field, val, delim=True, asis=False, num=False, rev_delim=False):
+    d = ',' if delim and not rev_delim else ''
+    ret = ''
     if val is None:
-        return ""
+        ret = ""
+    elif num and re.search(r'^\d+', val):
+        ret = """
+        "%s": %s%s
+        """ % (field, val, d)
     elif asis:
-        return """
+        ret  = """
         "%s": %s%s
         """ % (field, val, d)
     elif type(val) == Amount or type(val) == Issue:
-        return """
+        ret = """
         "%s": %s%s
         """ % (field, val.json(), d)
     elif type(val) == str and re.search(r'false|true', val):
-        return """
+        ret = """
         "%s": %s%s
         """ % (field, val, d)
-    return """
+    else:
+        ret = """
         "%s": %s%s
-    """ % (field, json.JSONEncoder().encode(val), d)
+        """ % (field, json.JSONEncoder().encode(val), d)
+    if rev_delim and ret != '':
+        ret = ',' + ret
+    return ret
 
 def get_with_prefix(prefix, params):
     rx = Re()
@@ -1081,23 +1090,6 @@ def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
         """ % (asset.json(), asset2.json(), index)
 
 def ledger_entry_oracle_request(account, id, index = None, hash = None):
-    def get_index(index):
-        if index is None:
-            return ""
-        rx = Re()
-        if rx.search(r'\d+', index):
-            return """,
-            "ledger_index": %d
-            """ % (int(index))
-        return """,
-            "ledger_index": "%s"
-        """ % (index)
-    def get_hash(hash):
-        if hash is None:
-            return ""
-        return """,
-            "ledger_hash": "%s"
-        """ % (hash)
     return """
     {
       "method": "ledger_entry",
@@ -1112,7 +1104,9 @@ def ledger_entry_oracle_request(account, id, index = None, hash = None):
         }
       ]
     }
-    """ % (account, int(id),  get_index(index), get_hash(hash))
+    """ % (account, int(id),
+           get_field('ledger_index', index, num=True, rev_delim=True),
+           get_field('ledger_hash', hash, rev_delim=True))
 
 def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker='None', type_=None):
     if hash is None and index is None:
@@ -1206,21 +1200,10 @@ def path_find_request(src: str, dst: str, dst_amount: Amount, send_max: Amount =
 
 def oracle_set_request(secret, account, id, data_series):
     def make_data_series(data_series):
-        def get_scale(scale):
-            re = Re()
-            if scale is None or re.search(r'0', scale):
-                return ""
-            return """,
-            "Scale": %d
-            """ % (int(scale))
-        def get_price(price):
-            return """,
-            "AssetPrice" : %d
-            """ % (int(price))
         str = "["
         for data in data_series:
-            scale = get_scale(data[3]) if len(data) == 4 else ""
-            price = get_price(data[2]) if len(data) >= 3 else ""
+            scale = data[3] if len(data) == 4 and re.search(r'0', data[3]) is None else None
+            price = data[2] if len(data) >= 3 else None
             str += """
                 {
                 "PriceData" : {
@@ -1230,7 +1213,9 @@ def oracle_set_request(secret, account, id, data_series):
                     %s
                 }
                 }
-            """ % (data[0], data[1], price, scale)
+            """ % (data[0], data[1],
+                   get_field('AssetPrice', price, rev_delim=True),
+                   get_field('Scale', scale, rev_delim=True))
         str += "]"
         return str
     return """
