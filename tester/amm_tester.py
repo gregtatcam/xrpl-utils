@@ -1078,6 +1078,44 @@ def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
         }
         """ % (asset.json(), asset2.json(), index)
 
+def ledger_entry_oracle_request(account, id, index = None, hash = None):
+    def get_index(index):
+        if index is None:
+            return ""
+        rx = Re()
+        if rx.search(r'\d+', index):
+            return """
+            "ledger_index": %d
+            """ % (int(index))
+        return """
+            "ledger_index": "%s"
+        """ % (index)
+    def get_hash(hash):
+        if hash is None:
+            return ""
+        return """
+            "ledger_hash": "%s"
+        """ % (hash)
+    delim1 = "," if (not (index is None and hash is None)) else ""
+    delim2 = "," if hash is not None else ""
+    return """
+    {
+      "method": "ledger_entry",
+      "params": [
+        {
+        "oracle": {
+        "account": "%s",
+        "oracle_document_id": %d
+        }
+        %s
+        %s
+        %s
+        %s
+        }
+      ]
+    }
+    """ % (account, int(id), delim1, get_index(index), delim2, get_hash(hash))
+
 def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker='None', type_=None):
     if hash is None and index is None:
         index = 'validated'
@@ -1167,6 +1205,72 @@ def path_find_request(src: str, dst: str, dst_amount: Amount, send_max: Amount =
            get_field('destination_amount', dst_amount, send_max is not None or src_curr is not None),
            get_field('send_max', send_max, src_curr is not None),
            get_field('source_currencies', get_curr(src_curr), False))
+
+def oracle_set_request(secret, account, id, data_series):
+    def make_data_series(data_series):
+        def get_scale(scale):
+            re = Re()
+            if scale is None or re.search(r'0', scale):
+                return ""
+            return """
+            "Scale": %d
+            """ % (int(scale))
+        delim = ''
+        str = "["
+        for data in data_series:
+            scale = get_scale(data[3]) if len(data) == 4 else ""
+            delim1 = "" if scale == "" else ","
+            str += delim + """
+                {
+                "PriceData" : {
+                    "BaseAsset" : "%s",
+                    "QuoteAsset" : "%s",
+                    "AssetPrice" : %d
+                    %s
+                    %s
+                }
+                }
+            """ % (data[0], data[1], int(data[2]), delim1, scale)
+            delim = ','
+        str += "]"
+        return str
+    return """
+    {
+    "method": "submit",
+    "params": [
+        {
+             "secret": "%s",
+             "tx_json": {
+                 "Account" : "%s",
+                 "AssetClass" : "63757272656E6379",
+                 "Fee" : "10",
+                 "LastUpdateTime" : %d,
+                 "OracleDocumentID" : %d,
+                 "PriceDataSeries" : %s,
+                "Provider" : "70726F7669646572",
+                "TransactionType" : "OracleSet",
+                "URI" : "555249"
+             }
+        }
+    ]
+    }
+    """ % (secret, account, int(time.time()), int(id), make_data_series(data_series))
+
+def oracle_delete_request(secret, account, id):
+    return """
+        {
+        "method": "submit",
+        "params": [
+            {
+                 "secret": "%s",
+                 "tx_json": {
+                     "Account" : "%s",
+                     "OracleDocumentID" : %d,
+                 }
+            }
+        ]
+        }
+        """ % (secret, account, int(id))
 
 
 ### End requests
@@ -2529,20 +2633,29 @@ def server_state(line):
         return True
     return False
 
-# only gets "amm" object, more general ledger_entry would require separate
+# only gets "amm" or oracle object, more general ledger_entry would require separate
 # command for each type
-# ledger entry XRP USD | object_id
+# ledger entry amm XRP USD | object_id
+# ledger entry oracle account documentid index
 def ledger_entry(line):
     rx = Re()
+    #ledger entry oracle account documentid #hash @index
+    if rx.search(r'^\s*ledger\s+entry\s+oracle\s+([^\s]+)\s+([^\s]+)(.*)$', line):
+        account = rx.match[1]
+        id = rx.match[2]
+        hash, index, rest = get_params(rx.match[3])
+        req = ledger_entry_oracle_request(accounts[account]['id'], id, index, hash)
+        res = send_request(req, node, port)
+        print(do_format(pprint.pformat(res)))
     # ledger entry object_id
-    if rx.search(r'^\s*ledger\s+entry\s+([^\s]+)\s*$', line):
+    elif rx.search(r'^\s*ledger\s+entry\s+amm\s+([^\s]+)\s*$', line):
         id = rx.match[1]
         req = ledger_entry_request(id=id)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
         return True
     # ledger entry asset asset2
-    elif rx.search(r'^\s*ledger\s+entry\s+([^\s]+)\s+([^\s]+)\s*$', line):
+    elif rx.search(r'^\s*ledger\s+entry\s+amm\s+([^\s]+)\s+([^\s]+)\s*$', line):
         asset = Issue.fromStr(rx.match[1])
         if asset is None:
             print('Invalid asset', asset)
@@ -2682,11 +2795,38 @@ def path_find(line):
         return True
     return False
 
+# oracle set account docid [base quote price scale,...]
+def oracle_set(line):
+    rx = Re()
+    if rx.search(r'^\s*oracle\s+set\s+([^\s]+)\s+([^\s]+)\s+\[([^\]]+)\]\s*$', line):
+        account = rx.match[1]
+        id = rx.match[2]
+        data_series = []
+        for data in rx.match[3].split(','):
+            data_series.append(data.split(' '))
+        request = oracle_set_request(accounts[account]['seed'], accounts[account]['id'], id, data_series)
+        res = send_request(request, node, port)
+        print(res)
+        error(res)
+        return True
+    return False
+
+def oracle_delete(line):
+    rx = Re()
+    if rx.search(r'^\s*oracle\s+delete\s+([^\s]+\s+([^\s]+)\s*$)', line):
+        account = rx.match[1]
+        id = rx.match[2]
+        request = oracle_delete_request(account, id)
+        res = send_request(request, node, port)
+        error(res)
+        return True
+    return False
 
 commands = {}
 account_commands = {}
 amm_commands = {}
 offer_commands = {}
+oracle_commands = {}
 
 # show available commands
 def help(line):
@@ -2708,6 +2848,8 @@ def help(line):
                     print(amm_commands[k2][1])
                 elif k2 in offer_commands:
                     print(offer_commands[k2][1])
+                elif k2 in oracle_commands:
+                    print(oracle_commands[k2][1])
                 else:
                     print("can't find:", line)
                     return None
@@ -2754,6 +2896,9 @@ amm_commands = {'bid': [amm_bid, "amm bid lp hash (min|max) price [acct1,acct2]:
                 amm withdraw account alias asset1in @eprice: amm withdraw options, alias is an alias for issue1, issue2 from amm create.
                 """],
                 'vote': [amm_vote, "amm vote lp alias feevalue: amm vote"]}
+oracle_commands = {
+    'set': [oracle_set, "oracle set account docid base quote price scale"],
+    'delete': [oracle_delete, "oracle delete account docid"]}
 
 
 def account_commands_(line):
@@ -2778,6 +2923,13 @@ def amm_commands_(line):
         return amm_commands[rx.match[1]][0](line)
     return False
 
+def oracle_commands_(line):
+    rx = Re()
+    if rx.search(r'^\s*oracle\s+(set|delete)', line):
+        return oracle_commands[rx.match[1]][0](line)
+    return False
+
+
 commands = {
     'account': [account_commands_, "account [objects|info|lines|offers|SetFlag|delete|channels|currencies|nfts|tx]: account commands, type account command to get specific help"],
     'accounts': [show_accounts, "accounts [a1,a2,...,aN]: output all or specified accounts"],
@@ -2801,10 +2953,11 @@ commands = {
     'h': [do_history, "history [n1[-n2]]: get the history of commands, if command number or range is included then execute these commands"],
     'issuers': [show_issuers, "issuers: show issuer accounts"],
     'last': [last, "last: execute last history command"],
-    'ledgerentry': [ledger_entry, "ledger entry [token token2|AMM objectid]: get amm object by token/token2 or ammid"],
+    'ledgerentry': [ledger_entry, "ledger entry [amm|oracle] [token token2|AMM objectid]|[account id]: get amm/oracle object by token/token2 or ammid or account id"],
     'ledgerdata': [ledger_data, "ledger data [#hash-ledger hash] [@index-ledger index] [$limit-number of objects] [%binary-true|false] [^marker-marker] [type-object type]: get ledger data"],
     'load': [load_accounts, "load accounts file name: loads accounts from json file as nameI, when I is the count"],
     'offer': [offer_commands_, "offer [create|cancel]: offer commands, type offer command to get specific help"],
+    'oracle': [oracle_commands_, "oracle [set|delete] account docid base quote price scale"],
     'path': [path_find, "path find src dest dest_amount [send_max] [[cur1,..]]: call path find"],
     'pay': [pay, "pay src dst[,dst1,...] amount currency [[path1,path2...] sendmax]: send a payment, specify [] for default path"],
     'pprint': [toggle_pprint, "pprint on|off: user friendly print"],
@@ -2818,6 +2971,7 @@ commands = {
     'setnode': [set_node, "set node node:port: sets the node to connect to"],
     'setwait': [set_wait, "set wait t: sets the wait between transactions to t seconds"],
     'trust': [trust_set, "trust set account,account1,.. amount currency issuer [flags]: set the trust"],
+    'tx': [tx_lookup, "tx hash: lookup tx metadata"],
     'verbose': [toggle_verbose, "verbose on|off: prints json load"],
     'wait': [wait, "wait t: wait t seconds"]
 }
