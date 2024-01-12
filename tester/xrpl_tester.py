@@ -1086,20 +1086,18 @@ def ledger_entry_oracle_request(account, id, index = None, hash = None):
             return ""
         rx = Re()
         if rx.search(r'\d+', index):
-            return """
+            return """,
             "ledger_index": %d
             """ % (int(index))
-        return """
+        return """,
             "ledger_index": "%s"
         """ % (index)
     def get_hash(hash):
         if hash is None:
             return ""
-        return """
+        return """,
             "ledger_hash": "%s"
         """ % (hash)
-    delim1 = "," if (not (index is None and hash is None)) else ""
-    delim2 = "," if hash is not None else ""
     return """
     {
       "method": "ledger_entry",
@@ -1111,12 +1109,10 @@ def ledger_entry_oracle_request(account, id, index = None, hash = None):
         }
         %s
         %s
-        %s
-        %s
         }
       ]
     }
-    """ % (account, int(id), delim1, get_index(index), delim2, get_hash(hash))
+    """ % (account, int(id),  get_index(index), get_hash(hash))
 
 def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker='None', type_=None):
     if hash is None and index is None:
@@ -1214,26 +1210,27 @@ def oracle_set_request(secret, account, id, data_series):
             re = Re()
             if scale is None or re.search(r'0', scale):
                 return ""
-            return """
+            return """,
             "Scale": %d
             """ % (int(scale))
-        delim = ''
+        def get_price(price):
+            return """,
+            "AssetPrice" : %d
+            """ % (int(price))
         str = "["
         for data in data_series:
             scale = get_scale(data[3]) if len(data) == 4 else ""
-            delim1 = "" if scale == "" else ","
-            str += delim + """
+            price = get_price(data[2]) if len(data) >= 3 else ""
+            str += """
                 {
                 "PriceData" : {
                     "BaseAsset" : "%s",
-                    "QuoteAsset" : "%s",
-                    "AssetPrice" : %d
+                    "QuoteAsset" : "%s"
                     %s
                     %s
                 }
                 }
-            """ % (data[0], data[1], int(data[2]), delim1, scale)
-            delim = ','
+            """ % (data[0], data[1], price, scale)
         str += "]"
         return str
     return """
