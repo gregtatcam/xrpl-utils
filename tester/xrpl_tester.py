@@ -7,6 +7,10 @@ import time
 import re
 import pprint
 from collections import defaultdict
+from xrpl.clients import JsonRpcClient
+from xrpl.models import XRP, IssuedCurrencyAmount, Payment, RipplePathFind
+from xrpl.transaction import autofill_and_sign
+from xrpl.wallet import generate_faucet_wallet
 
 do_pprint = True
 drops_per_xrp = 1_000_000
@@ -39,6 +43,8 @@ genesis_sec = 'snoPBrXtMeMyMHUVTgbuqAfg1SUTb'
 burn_acct = None
 burn_sec = None
 ammdevnet = 'http://amm.devnet.rippletest.net'
+devnet = 'http://s.devnet.rippletest.net'
+testnet = 'http://s.altnet.rippletest.net'
 
 # accounts keyed by alias, store account_id and master_seed as a pair
 accounts = defaultdict(defaultdict)
@@ -487,10 +493,20 @@ def get_array(params):
 
 ### Start requests
 def faucet_send_request(request):
-    res = requests.post('https://ammfaucet.devnet.rippletest.net/accounts', json=json.loads(request))
-    if res.status_code != 200:
-        raise Exception(res.text)
-    return json.loads(res.text)
+    if node == ammdevnet:
+        res = requests.post('https://ammfaucet.devnet.rippletest.net/accounts', json=json.loads(request))
+        if res.status_code != 200:
+            raise Exception(res.text)
+        return json.loads(res.text)
+    else:
+        client = JsonRpcClient('https://' + node + ':51234')
+        # Creating wallet to send money from
+        wallet = generate_faucet_wallet(client, debug=False)
+        j = {}
+        j['account'] = {}
+        j['account']['address'] = wallet.address
+        j['account']['secret'] = wallet.seed
+        return j
 
 def accountset_request(secret: str, account: str, t: str, flags: str, fee="10"):
     return """
@@ -1315,7 +1331,7 @@ def faucet_fund(line):
 
 # fund account[,account1,...] <XRP>: call wallet_create and pay from genesis XRP into account,account1,...
 def fund(line):
-    if node == ammdevnet:
+    if node == ammdevnet or ('http://' + node) == devnet or ('http://' + node) == testnet:
         return faucet_fund(line)
     rx = Re()
     global accounts
