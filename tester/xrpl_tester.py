@@ -596,19 +596,19 @@ def wallet_request():
         }
         """
 
-def tx_request(hash):
+def tx_request(hash, index = None):
     return """
     {
     "method": "tx",
     "params": [
         {
             "transaction": "%s",
-            "binary": false,
-            "ledger_index": "validated"
+            "binary": false
+            %s
         }
     ]
     }
-    """ % hash
+    """ % (hash, get_field('ledger_index', index, rev_delim=True))
 
 def account_info_request(account, index='validated'):
     return """
@@ -1044,6 +1044,7 @@ def bid_request(secret: str, account: str, issues,
     }
     """ % (secret, account, issues[0].json(), issues[1].json(), get_bid(), get_accounts(), fee, flags)
 
+'''
 def tx_request(txid):
     return """
     {
@@ -1056,6 +1057,7 @@ def tx_request(txid):
     ]
     }
     """ % txid
+'''
 
 def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
     assets_res = True if asset is not None and asset2 is not None else False
@@ -2601,9 +2603,10 @@ def toggle_pprint(line):
 
 def tx_lookup(line):
     rx = Re()
-    if rx.search(r'^\s*tx\s+([^\s]+)\s*$', line):
+    if rx.search(r'^\s*tx\s+([^\s]+)(.*)$', line):
         txid = rx.match[1]
-        request = tx_request(txid)
+        hash, index, rest = get_params(rx.match[2])
+        request = tx_request(txid, index)
         res = send_request(request, node, port)
         print(do_format(pprint.pformat(res)))
         return True
