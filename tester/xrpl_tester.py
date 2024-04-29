@@ -1218,11 +1218,12 @@ def path_find_request(src: str, dst: str, dst_amount: Amount, send_max: Amount =
 
 def oracle_set_request(secret, account, id, data_series):
     def make_data_series(data_series):
+        delim = ''
         str = "["
         for data in data_series:
             scale = data[3] if len(data) == 4 and re.search(r'0', data[3]) is None else None
             price = data[2] if len(data) >= 3 else None
-            str += """
+            str += delim + """
                 {
                 "PriceData" : {
                     "BaseAsset" : "%s",
@@ -1234,6 +1235,7 @@ def oracle_set_request(secret, account, id, data_series):
             """ % (data[0], data[1],
                    get_field('AssetPrice', price, rev_delim=True),
                    get_field('Scale', scale, rev_delim=True))
+            delim = ','
         str += "]"
         return str
     return """
@@ -1273,6 +1275,34 @@ def oracle_delete_request(secret, account, id):
         ]
         }
         """ % (secret, account, int(id))
+
+def get_aggregate_price_request(base_asset, quote_asset, oracles):
+    def make_oracles(oracles):
+        delim = ''
+        str = "["
+        for oracle in oracles:
+            account = oracle[0]
+            id = oracle[1]
+            str += delim + """
+                {
+                    "account" : "%s",
+                    "oracle_document_id" : %s
+                }
+            """ % (account, id)
+            delim = ','
+        str += "]"
+        return str
+    return """
+    {
+        "method": "get_aggregate_price",
+        "params": [
+            {
+                "base_asset": "%s",
+                "quote_asset": "%s",
+                "oracles": %s
+            }
+        ]
+    }""" % (base_asset, quote_asset, make_oracles(oracles))
 
 
 ### End requests
@@ -2825,6 +2855,26 @@ def oracle_delete(line):
         return True
     return False
 
+def oracle_aggregate(line):
+    rx = Re()
+    if rx.search(r'^\s*oracle\s+aggregate\s+([^\s]+)\s+([^\s]+)\s+\[([^\]]+)\]$', line):
+        base_asset = rx.match[1]
+        quote_asset = rx.match[2]
+        oracles = []
+        for oracle in rx.match[3].split(','):
+            account, id = oracle.split(' ')
+            account = getAccountId(account);
+            if account is None:
+                print(rx.match[1], 'not found')
+                return None
+            oracles.append([account, id])
+        request = get_aggregate_price_request(base_asset, quote_asset, oracles)
+        res = send_request(request, node, port)
+        print(do_format(pprint.pformat(res)))
+        return True
+    return False
+
+
 commands = {}
 account_commands = {}
 amm_commands = {}
@@ -2901,8 +2951,8 @@ amm_commands = {'bid': [amm_bid, "amm bid lp hash (min|max) price [acct1,acct2]:
                 'vote': [amm_vote, "amm vote lp alias feevalue: amm vote"]}
 oracle_commands = {
     'set': [oracle_set, "oracle set account docid base quote price scale"],
-    'delete': [oracle_delete, "oracle delete account docid"]}
-
+    'delete': [oracle_delete, "oracle delete account docid"],
+    'aggregate': [oracle_aggregate, "oracle aggregate base_asset quote_asset [account id,...]"]}
 
 def account_commands_(line):
     rx = Re()
@@ -2928,7 +2978,7 @@ def amm_commands_(line):
 
 def oracle_commands_(line):
     rx = Re()
-    if rx.search(r'^\s*oracle\s+(set|delete)', line):
+    if rx.search(r'^\s*oracle\s+(set|delete|aggregate)', line):
         return oracle_commands[rx.match[1]][0](line)
     return False
 
