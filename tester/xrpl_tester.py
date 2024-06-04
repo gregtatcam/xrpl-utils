@@ -63,6 +63,7 @@ verbose_hash = False
 # mpts to the mptid map, can have any number of characters
 # can not be the same as existing issuers
 mpts = defaultdict()
+mpts_alias = defaultdict()
 
 validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':262144,
              'passive':65536, 'immediateOrCancel':131072, 'fillOrKill': 262144,
@@ -103,11 +104,15 @@ def load_issuers():
 
 def load_mpts():
     global mpts
+    global mpts_alias
     try:
         with open('mpts.json', 'r') as f:
             mpts = json.load(f)
+        with open('mpts_alias.json', 'r') as f:
+            mpts_alias = json.load(f)
     except:
         mpts = defaultdict()
+        mpts_alias = defaultdict()
 
 def dump_history():
     global history
@@ -128,6 +133,8 @@ def dump_mpts():
     global mpts
     with open('mpts.json', 'w') as f:
         json.dump(mpts, f)
+    with open('mpts_alias.json', 'w') as f:
+        json.dump(mpts_alias, f)
 
 load_history()
 load_accounts_()
@@ -360,9 +367,8 @@ class Issue:
         return Issue(j['currency'], j['issuer'])
     def assetStr(self):
         if self.mpt_id is not None:
-            for (alias, id) in mpts.items():
-                if id == self.mpt_id:
-                    return alias
+            if self.mpt_id in mpts_alias:
+                return mpts_alias[self.mpt_id]
             return None
         return self.currency
 
@@ -456,13 +462,13 @@ class Amount:
 def fix_comma(s: str):
     return re.sub(',\s*}', '\n}', s)
 
-# convert some fields from hex to int
-def cvt_hex_to_int(json_obj):
+# convert some fields
+def cvt_fields(json_obj):
     keys = {'MPTAmount', 'AssetPrice', 'MaximumAmount', 'OutstandingAmount', 'LockedAmount',
             'ExchangeRate', 'BaseFee'}
     if isinstance(json_obj, list):
         for a in json_obj:
-            cvt_hex_to_int(a)
+            cvt_fields(a)
     elif isinstance(json_obj, dict):
         if 'DeliveredAmount' in json_obj and 'mpt_issuance_id' in json_obj['DeliveredAmount']:
             json_obj['DeliveredAmount']['value'] = int(json_obj['DeliveredAmount']['value'], 16)
@@ -470,13 +476,17 @@ def cvt_hex_to_int(json_obj):
             json_obj['delivered_amount']['value'] = int(json_obj['delivered_amount']['value'], 16)
         for key, value in json_obj.items():
             if isinstance(value, dict):
-                cvt_hex_to_int(value)
+                cvt_fields(value)
             elif isinstance(value, list):
                 for a in value:
-                    cvt_hex_to_int(a)
+                    cvt_fields(a)
             else:
                 if key in keys:
                     json_obj[key] = int(value, 16)
+                if key == 'mpt_issuance_id' and json_obj[key] in mpts_alias:
+                    json_obj[key] = mpts_alias[json_obj[key]]
+                if key == 'MPTokenIssuanceID' and json_obj[key] in mpts_alias:
+                    json_obj[key] = mpts_alias[json_obj[key]]
 
 def send_request(request, node = None, port = '51234'):
     if node == None:
@@ -488,7 +498,9 @@ def send_request(request, node = None, port = '51234'):
     else:
         url = 'http://%s:%s' % (node, port)
     if verbose:
-        print(do_format(pprint.pformat(json.loads(request))))
+        j = json.loads(request)
+        cvt_fields(j)
+        print(do_format(pprint.pformat(j)))
     res = requests.post(url, json = json.loads(request))
 
     if res.status_code != 200:
@@ -508,7 +520,7 @@ def send_request(request, node = None, port = '51234'):
             time.sleep(tx_wait)
     j = json.loads(res.text)
     try:
-        cvt_hex_to_int(j)
+        cvt_fields(j)
     finally:
         pass
     return j
@@ -1201,7 +1213,7 @@ def tx_request(txid):
     """ % txid
 '''
 
-def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
+def ledger_entry_request(asset=None, asset2=None, id=None, index='validated', hash = None):
     assets_res = True if asset is not None and asset2 is not None else False
     id_res = True if id is not None else False
     assert (assets_res and not id_res) or (id_res and not assets_res)
@@ -1211,12 +1223,15 @@ def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
           "method": "ledger_entry",
           "params": [
             {
-            "amm": "%s",
-            "ledger_index": "%s"
+            "amm": "%s"
+            %s
+            %s
             }
           ]
         }
-        """ % (id, index)
+        """ % (id,
+               get_field('ledger_index', index, rev_delim=True),
+               get_field('ledger_hash', hash, rev_delim=True))
     else:
         return """
         {
@@ -1227,11 +1242,15 @@ def ledger_entry_request(asset=None, asset2=None, id=None, index='validated'):
               "asset": %s,
               "asset2": %s
             },
-            "ledger_index": "%s"
+            %s
+            %s
             }
           ]
         }
-        """ % (asset.json(), asset2.json(), index)
+        """ % (asset.json(), asset2.json(),
+               get_field('ledger_index', index, rev_delim=True),
+               get_field('ledger_hash', hash, rev_delim=True))
+
 
 def ledger_entry_oracle_request(account, id, index = None, hash = None):
     return """
@@ -1252,21 +1271,39 @@ def ledger_entry_oracle_request(account, id, index = None, hash = None):
            get_field('ledger_index', index, num=True, rev_delim=True),
            get_field('ledger_hash', hash, rev_delim=True))
 
-def ledger_entry_mpt_request(mpt_id, index = None, hash = None):
-    return """
-    {
-      "method": "ledger_entry",
-      "params": [
+def ledger_entry_mpt_request(mpt_id, account = None, index = None, hash = None):
+    if account is None:
+        return """
         {
-        "mpt_issuance": "%s"
-        %s
-        %s
+          "method": "ledger_entry",
+          "params": [
+            {
+            "mpt_issuance": "%s"
+            %s
+            %s
+            }
+          ]
         }
-      ]
-    }
-    """ % (mpt_id,
-           get_field('ledger_index', index, num=True, rev_delim=True),
-           get_field('ledger_hash', hash, rev_delim=True))
+        """ % (mpt_id,
+               get_field('ledger_index', index, num=True, rev_delim=True),
+               get_field('ledger_hash', hash, rev_delim=True))
+    return """
+            {
+              "method": "ledger_entry",
+              "params": [
+                {
+                "mptoken": {
+                    "mpt_issuance": "%s",
+                    "account": "%s"
+                }
+                %s
+                %s
+                }
+              ]
+            }
+            """ % (mpt_id, account,
+                   get_field('ledger_index', index, num=True, rev_delim=True),
+                   get_field('ledger_hash', hash, rev_delim=True))
 
 def ledger_data_request(hash=None, index=None, binary='false', limit='5', marker='None', type_=None):
     if hash is None and index is None:
@@ -1853,7 +1890,7 @@ def amm_create(line):
                     del accounts[alias_prev]
             cur = f'{amt1.issue.assetStr()}-{amt2.issue.assetStr()}'
             verbose = False
-            request = amm_info_request(None, amt1.issue, amt2.issue, index='validated')
+            request = amm_info_request(None, amt1.issue, amt2.issue, index='current')
             res = send_request(request, node, port)
             verbose = verboseSave
             if 'result' not in res or 'amm' not in res['result']:
@@ -1895,7 +1932,7 @@ def getAMMIssue(s) -> Issue :
     return None
 
 # can pass either the asset pair or the amm account
-# amm info [currency1 currency2] [amm_account] [account] [\[Amount,Amount2...\]] [$ledger] [save key]
+# amm info [currency1 currency2] [amm_account] [account] [\[Amount,Amount2...\]] [@ledger] [save key]
 def amm_info(line):
     global accounts
     def do_save(res, alias):
@@ -1911,9 +1948,9 @@ def amm_info(line):
         save = rx.match[1]
         line = re.sub(r'\s+save\s+([^\s]+)\s*$', '', line)
     index = 'validated'
-    if rx.search(r'\s+\$([^\s]+)', line):
+    if rx.search(r'\s+\@([^\s]+)', line):
         index = rx.match[1]
-        line = re.sub(r'\s+\$([^\s]+)', '', line)
+        line = re.sub(r'\s+\@([^\s]+)', '', line)
     if rx.search(r'^\s*amm\s+info\s+(.+)$', line):
         rest = rx.match[1]
         fields = None
@@ -2222,6 +2259,7 @@ def clear_all(line):
         accounts = defaultdict(defaultdict)
         issuers = defaultdict()
         mpts = defaultdict()
+        mpts_alias = defaultdict()
         dump_accounts()
         dump_issuers()
         dump_mpts()
@@ -2253,6 +2291,8 @@ def show_issuers(line):
     global issuers
     if rx.search(r'^\s*issuers\s*$', line):
         for k,v in issuers.items():
+            print(k,v)
+        for k,v in mpts.items():
             print(k,v)
         return True
     return False
@@ -2956,14 +2996,15 @@ def ledger_entry(line):
         print(do_format(pprint.pformat(res)))
         return True
     # ledger entry object_id
-    elif rx.search(r'^\s*ledger\s+entry\s+amm\s+([^\s]+)\s*$', line):
+    elif rx.search(r'^\s*ledger\s+entry\s+amm\s+([^\s]+)(.*)$', line):
         id = rx.match[1]
-        req = ledger_entry_request(id=id)
+        hash, index, rest = get_params(rx.match[2])
+        req = ledger_entry_request(id=id, index=index, hash=hash)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
         return True
     # ledger entry asset asset2
-    elif rx.search(r'^\s*ledger\s+entry\s+amm\s+([^\s]+)\s+([^\s]+)\s*$', line):
+    elif rx.search(r'^\s*ledger\s+entry\s+amm\s+([^\s]+)\s+([^\s]+)(.*)$', line):
         asset = Issue.fromStr(rx.match[1])
         if asset is None:
             print('Invalid asset', asset)
@@ -2972,13 +3013,26 @@ def ledger_entry(line):
         if asset2 is None:
             print('Invalid asset', asset2)
             return None
-        req = ledger_entry_request(asset=asset, asset2=asset2)
+        hash, index, rest = get_params(rx.match[3])
+        req = ledger_entry_request(asset=asset, asset2=asset2, index=index, hash=hash)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
         return True
-    elif rx.search(r'^\s*ledger\s+entry\s+mpt\s+([^\s]+)\s$', line):
-        mpt_id = rx.match[1]
-        req = ledger_entry_mpt_request(mpt_id)
+    elif rx.search(r'^\s*ledger\s+entry\s+mpt\s+([^\s]+)(.*)$', line):
+        if rx.match[1] in mpts:
+            mpt_id = mpts[rx.match[1]]
+        else:
+            mpt_id = rx.match[1]
+        hash, index, rest = get_params(rx.match[2])
+        account = rest if rest is not None and rx.search(r'^\s$', rest) is None else None
+        account_id = None
+        if account:
+            account = account.replace(' ', '')
+            account_id = getAccountId(account)
+            if account_id is None:
+                print(account, 'not found')
+                return None
+        req = ledger_entry_mpt_request(mpt_id, account_id, index, hash)
         res = send_request(req, node, port)
         print(do_format(pprint.pformat(res)))
         return True
@@ -3209,7 +3263,7 @@ def mpt_create(line):
         if rest is not None:
             flags = getFlags(rest, 0)
         # get sequence
-        request = account_info_request(account_id)
+        request = account_info_request(account_id, 'current')
         res = send_request(request, node, port)
         seq = res['result']['account_data']['Sequence']
         acct = binascii.b2a_hex(decode_classic_address(account_id)).decode("utf-8")
@@ -3218,6 +3272,7 @@ def mpt_create(line):
         res = send_request(request, node, port)
         if error(res) == False:
             mpts[mpt_alias] = mpt_id
+            mpts_alias[mpt_id] = mpt_alias
             dump_mpts()
         return True
     return False
@@ -3328,6 +3383,7 @@ amm_commands = {}
 offer_commands = {}
 oracle_commands = {}
 mpt_commands = {}
+ledger_commands = {}
 
 # show available commands
 def help(line):
@@ -3411,6 +3467,14 @@ mpt_commands = {
     'destroy': [mpt_destroy, 'mpt destroy account mptid'],
 }
 
+ledger_commands = {
+    'ledger': [ledger, "ledger [#hash-ledger hash] [@index-ledger index]: ledger command"],
+    'entry': [ledger_entry,
+                    "ledger entry [amm|oracle|mpt] [token token2|AMM objectid|mpt_id]|[account id]: get amm/oracle object by token/token2 or ammid or account id"],
+    'data': [ledger_data,
+                   "ledger data [#hash-ledger hash] [@index-ledger index] [$limit-number of objects] [%binary-true|false] [^marker-marker] [type-object type]: get ledger data"],
+}
+
 def account_commands_(line):
     rx = Re()
     if rx.search(r'^\s*account\s+(objects|info|lines|offers|SetFlag|ClearFlag|delete|channels|currencies|nfts|tx)', line):
@@ -3445,6 +3509,14 @@ def mpt_commands_(line):
         return mpt_commands[rx.match[1]][0](line)
     return False
 
+def ledger_commands_(line):
+    rx = Re()
+    if rx.search(r'^\s*ledger\s+(entry|data)', line):
+        return ledger_commands[rx.match[1]][0](line)
+    elif rx.search(r'^\s*ledger\s+', line):
+        return ledger_commands['ledger'][0](line)
+    return False
+
 
 commands = {
     'account': [account_commands_, "account [objects|info|lines|offers|SetFlag|delete|channels|currencies|nfts|tx]: account commands, type account command to get specific help"],
@@ -3469,9 +3541,7 @@ commands = {
     'h': [do_history, "history [n1[-n2]]: get the history of commands, if command number or range is included then execute these commands"],
     'issuers': [show_issuers, "issuers: show issuer accounts"],
     'last': [last, "last: execute last history command"],
-    'ledger': [ledger, "ledger [#hash-ledger hash] [@index-ledger index]: ledger command"],
-    'ledgerentry': [ledger_entry, "ledger entry [amm|oracle|mpt] [token token2|AMM objectid|mpt_id]|[account id]: get amm/oracle object by token/token2 or ammid or account id"],
-    'ledgerdata': [ledger_data, "ledger data [#hash-ledger hash] [@index-ledger index] [$limit-number of objects] [%binary-true|false] [^marker-marker] [type-object type]: get ledger data"],
+    'ledger': [ledger_commands_, "ledger [entry|data]: ledger commands"],
     'load': [load_accounts, "load accounts file name: loads accounts from json file as nameI, when I is the count"],
     'mpt': [mpt_commands_, "mpt [create|authorize|set|destroy]: mpt commands, type mpt command to get specific help"],
     'offer': [offer_commands_, "offer [create|cancel]: offer commands, type offer command to get specific help"],
