@@ -2506,7 +2506,7 @@ def last(line):
     rx = Re()
     if rx.search(r'^\s*last\s*$', line):
         exec_command(history[-1])
-        return None
+        return True
     return False
 
 def flags(line):
