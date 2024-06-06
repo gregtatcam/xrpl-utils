@@ -488,6 +488,12 @@ def cvt_fields(json_obj):
                 if key == 'MPTokenIssuanceID' and json_obj[key] in mpts_alias:
                     json_obj[key] = mpts_alias[json_obj[key]]
 
+def get_tx_hash(j):
+    if 'result' in j and 'tx_json' in j['result'] and 'hash' in j['result']['tx_json']:
+        return j['result']['tx_json']['hash']
+    return None
+
+
 def send_request(request, node = None, port = '51234'):
     if node == None:
         node = "1"
@@ -509,8 +515,9 @@ def send_request(request, node = None, port = '51234'):
     if (verbose or verbose_hash) and 'method' in j and j['method'] == 'submit':
         if verbose_hash:
             j1 = json.loads(res.text)
-            if 'result' in j1 and 'tx_json' in j1['result'] and 'hash' in j1['result']['tx_json']:
-                print('Ok:200', j1['result']['tx_json']['hash'])
+            hash = get_tx_hash(j1)
+            if hash is not None:
+                print('Ok:200', hash)
         else:
             print(res.text)
     if 'method' in j and j['method'] == 'submit':
@@ -1804,6 +1811,9 @@ def pay(line):
             print('invalid amount')
             return None
         else:
+            saveto = None
+            if rx.search(r'save\s+to\s+\$([^\s]+)', rest):
+                saveto = rx.match[1]
             paths = None
             sendmax = None
             flags = "2147483648"
@@ -1829,7 +1839,11 @@ def pay(line):
                                               flags=flags)
                     res = send_request(payment, node, port)
                     if error(res):
-                        break
+                        return None
+                    if saveto is not None:
+                        hash = get_tx_hash(res)
+                        if hash is not None:
+                            store[saveto] = hash
                     #if verbose:
                     #    print(res)
             except Exception as ex:
@@ -2301,7 +2315,7 @@ def toggle_verbose(line):
     rx = Re()
     global verbose
     global verbose_hash
-    if rx.search(r'^\s*verbose\s+(on|off)(\s+all\s*)$', line):
+    if rx.search(r'^\s*verbose\s+(on|off)(\s+all\s*)?$', line):
         on = rx.match[1] == 'on'
         verbose = on
         if rx.match[2] is not None:
@@ -2949,6 +2963,8 @@ def tx_lookup(line):
     rx = Re()
     if rx.search(r'^\s*tx\s+([^\s]+)(.*)$', line):
         txid = rx.match[1]
+        if txid[0] == '$':
+            txid = store[txid[1:]]
         hash, index, rest = get_params(rx.match[2])
         if hash is not None:
             request = tx_request(txid, lhash=hash)
