@@ -211,6 +211,40 @@ def getAlias(id):
             return alias
     return None
 
+#[LedgerEntryType:[MPToken;Offer],Account,MPTAmount,MPTokenIssuanceID]
+def make_objects_filter(str):
+    rx = Re()
+    filter = None
+    if rx.search(r'\[([^\s]+)\]', str):
+        try:
+            filter = {}
+            fstr = rx.match[1]
+            while fstr != '':
+                # k:v or k:[v1,...] or k
+                if rx.search(r'^(([^:,]+:[^:,\[]+)|([^:,]+:\[[^\]]+\])|([^:,\]\]]+))(,(.+))?$', fstr):
+                    s = rx.match[1]
+                    if rx.match[5] is not None:
+                        fstr = rx.match[6]
+                    else:
+                        fstr = ''
+                # also requesting to match a value
+                if rx.search(r'([^\s]+):([^\s]+)', s):
+                    k = rx.match[1]
+                    v = rx.match[2]
+                    # list of values
+                    if rx.search(r'\[([^\s]+)\]', v):
+                        filter[k] = {e for e in rx.match[1].split(',')}
+                    else:
+                        filter[k] = {v}
+                else:
+                    filter[s] = None
+        except:
+            filter = None
+        finally:
+            str = re.sub(r'\[.+\]', '', str)
+    return (filter, str)
+
+
 """ [],[]
 "Paths" : [
       [
@@ -2977,16 +3011,55 @@ def tx_lookup(line):
             request = tx_request(txid, index=index)
         res = send_request(request, node, port)
         # check if a filter is included to print specified ledger entries
-        if rx.search(r'\[(.+)\]', rest):
-            filter = set()
-            for let in rx.match[1].split(','):
-                filter.add(let)
-            meta = []
-            for m in res['result']['meta']['AffectedNodes']:
-                for k, v in m.items():
-                    if v['LedgerEntryType'] in filter:
-                        meta.append({k:v})
-            res['result']['meta']['AffectedNodes'] = meta
+        filter, rest = make_objects_filter(rest)
+        if filter is not None:
+            try:
+                meta = []
+                for m in res['result']['meta']['AffectedNodes']:
+                    # k is CreatedNode,ModifiedNode,DeletedNode
+                    for k, v in m.items():
+                        # filter is for the FinalFields
+                        if ('LedgerEntryType' in filter and
+                                v['LedgerEntryType'] not in filter['LedgerEntryType']):
+                            # don't include
+                            break
+                        obj = {}
+                        obj[k] = {}
+                        obj[k]['LedgerEntryType'] = v['LedgerEntryType']
+                        # only include FinalFields with the columns and
+                        # all PreviousFields
+                        final_fields = {}
+                        for k1, v1 in m[k]['FinalFields'].items():
+                            if 'All' in filter or (k1 in filter and (filter[k1] is None or v1 in filter[k1])):
+                                final_fields[k1] = v1
+                        obj[k]['FinalFields'] = final_fields
+                        obj[k]['PreviousFields'] = m[k]['PreviousFields']
+                        meta.append(obj)
+                # only retain the "interesting" fields
+                try:
+                    del res['result']['Sequence']
+                    del res['result']['SigningPubKey']
+                    del res['result']['TxnSignature']
+                    del res['result']['ctid']
+                    del res['result']['date']
+                    del res['result']['inLedger']
+                    del res['result']['ledger_index']
+                    del res['result']['meta']['TransactionIndex']
+                except:
+                    pass
+                def sort_helper(m):
+                    if 'ModifiedNode' in m:
+                        return m['ModifiedNode']['FinalFields']['Account']
+                    elif 'DeletedNode' in m:
+                        return m['DeletedNode']['FinalFields']['Account']
+                    return m['CreatedNode']['FinalFields']['Account']
+
+                # sort by Account if included
+                if 'Account' in filter:
+                    meta = sorted(meta, key=sort_helper)
+                res['result']['meta']['AffectedNodes'] = meta
+            except:
+                pass
         print(do_format(pprint.pformat(res)))
         return True
     return False
@@ -3087,7 +3160,7 @@ def ledger_data(line):
         return True
     return False
 
-# account objects account [#hash] [@index] [$limit] [^maker] [delete_only] [type]
+# account objects account [#hash] [@index] [$limit] [^maker] [delete_only] [type] [field1,...]
 def account_objects(line):
     rx = Re()
     if rx.search(r'^\s*account\s+objects\s+([^\s]+)(.*)\s*$', line):
@@ -3096,6 +3169,8 @@ def account_objects(line):
             print(rx.match[1], 'account not found')
             return None
         rest = rx.match[2]
+        # list of account objects fields to output
+        filter, rest = make_objects_filter(rest)
         type_ = None
         hash, index, rest = get_params(rest, 'validated')
         limit, marker, delete_only, rest = get_params_ext(rest)
@@ -3105,6 +3180,24 @@ def account_objects(line):
         req = account_objects_request(account, hash=hash, index=index, limit=limit, marker=marker,
                                       delete_only = delete_only, type_ = type_)
         res = send_request(req, node, port)
+        if filter is not None:
+            account_objects = []
+            for o in res['result']['account_objects']:
+                obj = {}
+                for k, v in o.items():
+                    if k in filter:
+                        # if filter value doesn't match then skip this obj
+                        if filter[k] is not None:
+                            if v not in filter[k]:
+                                obj = None
+                                break
+                            # don't include in the object if it matches, we know it's value
+                        else:
+                            obj[k] = v
+                if obj is not None:
+                    account_objects.append(obj)
+            #res['result']['account_objects'] = account_objects
+            res = account_objects
         print(do_format(pprint.pformat(res)))
         return True
     return False
