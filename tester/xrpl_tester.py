@@ -312,13 +312,14 @@ class Issue:
                 rest = rx.match[2]
                 if currency == 'XRP' or currency == 'XRPD':
                     return (Issue(currency, None), rest)
+                # it may have an issuer but doesn't have to
+                # it could be next amount
                 if with_issuer and rx.search(r'^\s+([^\s]+)(.*)$', rest):
-                    issuer = rx.match[1]
-                    rest = rx.match[2]
-                    id = getAccountId(issuer)
-                    if id is None:
-                        return (None, s)
-                    return (Issue(currency, id), rest)
+                    # match[1] might be account
+                    id = getAccountId(rx.match[1])
+                    # matched the issuer
+                    if id is not None:
+                        return (Issue(currency, id), rx.match[2])
                 if currency in issuers:
                     return (Issue(currency, getAccountId(issuers[currency])), rest)
         return (None, s)
@@ -472,8 +473,9 @@ def cvt_fields(json_obj):
     elif isinstance(json_obj, dict):
         if 'DeliveredAmount' in json_obj and 'mpt_issuance_id' in json_obj['DeliveredAmount']:
             json_obj['DeliveredAmount']['value'] = int(json_obj['DeliveredAmount']['value'], 16)
-        elif 'delivered_amount' in json_obj and 'mpt_issuance_id' in json_obj['delivered_amount']:
-            json_obj['delivered_amount']['value'] = int(json_obj['delivered_amount']['value'], 16)
+        # delivered_amount is not hex?
+        #elif 'delivered_amount' in json_obj and 'mpt_issuance_id' in json_obj['delivered_amount']:
+        #    json_obj['delivered_amount']['value'] = int(json_obj['delivered_amount']['value'], 16)
         for key, value in json_obj.items():
             if isinstance(value, dict):
                 cvt_fields(value)
@@ -505,7 +507,8 @@ def send_request(request, node = None, port = '51234'):
         url = 'http://%s:%s' % (node, port)
     if verbose:
         j = json.loads(request)
-        cvt_fields(j)
+        if do_pprint:
+            cvt_fields(j)
         print(do_format(pprint.pformat(j)))
     res = requests.post(url, json = json.loads(request))
 
@@ -527,7 +530,8 @@ def send_request(request, node = None, port = '51234'):
             time.sleep(tx_wait)
     j = json.loads(res.text)
     try:
-        cvt_fields(j)
+        if do_pprint:
+            cvt_fields(j)
     finally:
         pass
     return j
@@ -1668,7 +1672,7 @@ def fund(line):
                                           flags='0')
                 res = send_request(payment, node, port)
                 if error(res):
-                    return None
+                    return True
                 set = accountset_request(seed, id, 'SetFlag', "8")
                 res = send_request(set, node, port)
                 error(res)
@@ -1839,7 +1843,7 @@ def pay(line):
                                               flags=flags)
                     res = send_request(payment, node, port)
                     if error(res):
-                        return None
+                        return True
                     if saveto is not None:
                         hash = get_tx_hash(res)
                         if hash is not None:
@@ -1858,15 +1862,16 @@ def amm_create(line):
     global accounts
     global verbose
     rx = Re()
-    if rx.search(r'^\s*amm\s+create\s+([^\s]+)\s+(([^\s]+)\s+(.+))$', line):
-        if getAccountId(rx.match[3]) is not None:
-            alias = rx.match[1]
-            account = rx.match[3]
-            rest = rx.match[4]
-        else:
-            account = rx.match[1]
-            rest = rx.match[2]
-            alias = None
+    alias = None
+    # amm alias is defined
+    if rx.search(r'^\s*amm\s+create\s+@([^\s+]+)\s+', line):
+        alias = rx.match[1];
+        line = re.sub(r'@[^\s]+\s+', '', line)
+    # account currency currency [trading fee]
+    # currency may follow by the issuer: USD gw
+    if rx.search(r'^\s*amm\s+create\s+([^\s]+)\s+(.+)$', line):
+        account = rx.match[1]
+        rest = rx.match[2]
         if not getAccountId(account):
             print(account, 'account not found')
             return None
@@ -2971,6 +2976,17 @@ def tx_lookup(line):
         else:
             request = tx_request(txid, index=index)
         res = send_request(request, node, port)
+        # check if a filter is included to print specified ledger entries
+        if rx.search(r'\[(.+)\]', rest):
+            filter = set()
+            for let in rx.match[1].split(','):
+                filter.add(let)
+            meta = []
+            for m in res['result']['meta']['AffectedNodes']:
+                for k, v in m.items():
+                    if v['LedgerEntryType'] in filter:
+                        meta.append({k:v})
+            res['result']['meta']['AffectedNodes'] = meta
         print(do_format(pprint.pformat(res)))
         return True
     return False
