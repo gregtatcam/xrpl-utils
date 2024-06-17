@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import gnureadline as readline
+import os
+import atexit
 import requests
 import sys
 import random
@@ -23,6 +26,8 @@ script = None
 store = {}
 tx_wait = 0.1
 tx_wait_save = tx_wait
+auto_accept = False
+debug = False
 i = 1
 while i < len(sys.argv):
     if sys.argv[i] == '--node':
@@ -36,6 +41,8 @@ while i < len(sys.argv):
         script = sys.argv[i]
     elif sys.argv[i] == '--fund':
         fund = True
+    elif sys.argv[i] == '--debug':
+        debug = True
     else:
         raise Exception(f'invalid argument {sys.argv[i]}')
     i += 1
@@ -65,6 +72,17 @@ verbose_hash = False
 mpts = defaultdict()
 mpts_alias = defaultdict()
 
+readline.set_history_length(1000)
+# File to store the command history
+HISTORY_FILE = os.path.expanduser(".history.json")
+
+# Load history if it exists
+if os.path.exists(HISTORY_FILE):
+    readline.read_history_file(HISTORY_FILE)
+
+# Save history on exit
+atexit.register(readline.write_history_file, HISTORY_FILE)
+
 validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':262144,
              'passive':65536, 'immediateOrCancel':131072, 'fillOrKill': 262144,
              'sell': 524288, 'accountTxnID':5, 'authorizedNFTokenMinter': 10, 'defaultRipple': 8,
@@ -81,9 +99,12 @@ validFlags = {'noDirectRipple':65536, 'partialPayment':131072, 'limitQuality':26
 def load_history():
     global history
     try:
-        with open('history.json', 'r') as f:
-            history = json.load(f)
-    except:
+        history = list()
+        h_len = readline.get_current_history_length()
+        for i in range(2, h_len + 1):
+            history.append(readline.get_history_item(i))
+    except Exception as e:
+        print(e)
         history = list()
 
 def load_accounts_():
@@ -116,8 +137,7 @@ def load_mpts():
 
 def dump_history():
     global history
-    with open('history.json', 'w') as f:
-        json.dump(history, f)
+    readline.write_history_file(HISTORY_FILE)
 
 def dump_accounts():
     global accounts
@@ -529,6 +549,9 @@ def get_tx_hash(j):
         return j['result']['tx_json']['hash']
     return None
 
+def accept():
+    ledger_accept('ledger accept')
+
 
 def send_request(request, node = None, port = '51234'):
     if node == None:
@@ -558,8 +581,8 @@ def send_request(request, node = None, port = '51234'):
         else:
             print(res.text)
     if 'method' in j and j['method'] == 'submit':
-        if j['params'][0]['tx_json']['TransactionType'] == 'AMMCreate':
-            time.sleep(6)
+        if auto_accept:
+            accept()
         else:
             time.sleep(tx_wait)
     j = json.loads(res.text)
@@ -1943,7 +1966,10 @@ def amm_create(line):
                     del accounts[alias_prev]
             cur = f'{amt1.issue.assetStr()}-{amt2.issue.assetStr()}'
             verbose = False
-            request = amm_info_request(None, amt1.issue, amt2.issue, index='current')
+            # force to close
+            if not auto_accept:
+                ledger_accept('ledger accept')
+            request = amm_info_request(None, amt1.issue, amt2.issue, index='validated')
             res = send_request(request, node, port)
             verbose = verboseSave
             if 'result' not in res or 'amm' not in res['result']:
@@ -3160,6 +3186,14 @@ def ledger_data(line):
         return True
     return False
 
+def ledger_accept(line):
+    rx = Re()
+    if rx.search(r'^\s*ledger\s+accept\s*$', line):
+        res = send_request('{"method": "ledger_accept"}', node, port)
+        error(res)
+        return True
+    return False
+
 # account objects account [#hash] [@index] [$limit] [^maker] [delete_only] [type] [field1,...]
 def account_objects(line):
     rx = Re()
@@ -3598,6 +3632,7 @@ ledger_commands = {
                     "ledger entry [amm|oracle|mpt] [token token2|AMM objectid|mpt_id]|[account id]: get amm/oracle object by token/token2 or ammid or account id"],
     'data': [ledger_data,
                    "ledger data [#hash-ledger hash] [@index-ledger index] [$limit-number of objects] [%binary-true|false] [^marker-marker] [type-object type]: get ledger data"],
+    'accept': [ledger_accept, "ledger accept: close the ledger"],
 }
 
 def account_commands_(line):
@@ -3636,14 +3671,23 @@ def mpt_commands_(line):
 
 def ledger_commands_(line):
     rx = Re()
-    if rx.search(r'^\s*ledger\s+(entry|data)', line):
+    if rx.search(r'^\s*ledger\s+(entry|data|accept)', line):
         return ledger_commands[rx.match[1]][0](line)
     elif rx.search(r'^\s*ledger\s+', line):
         return ledger_commands['ledger'][0](line)
     return False
 
+def toggle_accept(line):
+    global auto_accept
+    rx = Re()
+    if rx.search(r'^\s*auto\s+accept\s+(on|off)\s*$', line):
+        auto_accept = True if rx.match[1] == 'on' else False
+        return True
+    return False
+
 
 commands = {
+    'autoaccept': [toggle_accept, "auto accept [on|off]: set ledger accept on/off after each submit"],
     'account': [account_commands_, "account [objects|info|lines|offers|SetFlag|delete|channels|currencies|nfts|tx]: account commands, type account command to get specific help"],
     'accounts': [show_accounts, "accounts [a1,a2,...,aN]: output all or specified accounts"],
     'amm': [amm_commands_, "amm [create|deposit|withdraw|vote|bid|info|hash]: amm commands, type amm command to get specific help"],
@@ -3722,12 +3766,49 @@ def exec_command(line):
     else:
         print('invalid command:', line)
 
+'''
+# Enable tab completion
+readline.parse_and_bind("tab: complete")
+
+# Set maximum history file size
+readline.set_history_length(1000)
+
+# Optionally, you can add custom completer functions
+def completer(text, state):
+    commands = ['help', 'exit', 'list', 'show']
+    matches = [cmd for cmd in commands if cmd.startswith(text)]
+    return matches[state] if state < len(matches) else None
+
+readline.set_completer(completer)
+'''
+
+def main():
+    while True:
+        try:
+            # Read input from the user
+            command = input("> ")
+            # Execute the command (here we just print it)
+            exec_command(command)
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            # Handle interrupt signal (Ctrl+C)
+            print("\nKeyboardInterrupt. Use ^D to exit.")
+        except Exception as e:
+            # Handle other exceptions
+            print(f"Error: {e}")
+
+def main_debug():
+    prompt()
+    for line in sys.stdin:
+        exec_command(line)
+        prompt()
+
+
 if __name__ == "__main__":
     if script is not None:
         exec_command(f'run {script}')
+    elif debug:
+        main_debug()
     else:
-        prompt()
-        for line in sys.stdin:
-            exec_command(line)
-            prompt()
-
+        main()
