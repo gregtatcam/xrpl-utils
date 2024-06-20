@@ -1,0 +1,15 @@
+# call wallet_create and pay from the genesis account into the accounts
+fund gw,a1,a2,a3 10000XRP
+# create the trustline between the accounts and the gw issuer
+trust set a1,a2,a3 10000USD gw
+# pay from the issuer into the accounts
+pay gw a1,a2,a2 1000USD
+# create offer to buy 100XRP for 100USD
+offer create a1 100XRP 100USD
+# create amm
+amm create gw 1000XRP 1010USD
+# pay 50USD from a2 to a3, sendMax is 60XRP, path is USD.
+# 'with-meta' parameter tells the script to print the metadata.
+# the meta-data prints account aliases (defined in 'fund') instead
+# of actual addresses. amm alias for the above is ammXRP-USD.
+pay a2 a3 50USD [[USD]] 60XRP with-meta
