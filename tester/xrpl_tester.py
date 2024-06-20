@@ -3055,11 +3055,13 @@ def tx_lookup(line):
                         # only include FinalFields with the columns and
                         # all PreviousFields
                         final_fields = {}
-                        for k1, v1 in m[k]['FinalFields'].items():
+                        fields_key = 'FinalFields' if k != 'CreatedNode' else 'NewFields'
+                        for k1, v1 in m[k][fields_key].items():
                             if 'All' in filter or (k1 in filter and (filter[k1] is None or v1 in filter[k1])):
                                 final_fields[k1] = v1
-                        obj[k]['FinalFields'] = final_fields
-                        obj[k]['PreviousFields'] = m[k]['PreviousFields']
+                        obj[k][fields_key] = final_fields
+                        if fields_key != 'NewFields':
+                            obj[k]['PreviousFields'] = m[k]['PreviousFields']
                         meta.append(obj)
                 # only retain the "interesting" fields
                 try:
@@ -3078,7 +3080,7 @@ def tx_lookup(line):
                         return m['ModifiedNode']['FinalFields']['Account']
                     elif 'DeletedNode' in m:
                         return m['DeletedNode']['FinalFields']['Account']
-                    return m['CreatedNode']['FinalFields']['Account']
+                    return m['CreatedNode']['NewFields']['Account']
 
                 # sort by Account if included
                 if 'Account' in filter:
