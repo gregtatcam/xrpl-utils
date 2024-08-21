@@ -441,7 +441,7 @@ class Amount:
             return """
             {
                 "mpt_issuance_id" : "%s",
-                "value" : "%s"
+                "value" : "%d"
             }
             """ % (self.issue.mpt_id, self.value)
         else:
@@ -1442,7 +1442,10 @@ def path_find_request(src: str, dst: str, dst_amount: Amount, send_max: Amount =
             return None
         l = []
         for curr in src_curr:
-            l.append({"currency": curr});
+            if curr in mpts:
+                l.append("mpt_issuance_id", mpts[curr])
+            else:
+                l.append({"currency": curr});
         return l
 
     return """
@@ -1968,7 +1971,8 @@ def amm_create(line):
             verbose = False
             # force to close
             if not auto_accept:
-                ledger_accept('ledger accept')
+                accept()
+                time.sleep(1) # still need to wait for ledger to close
             request = amm_info_request(None, amt1.issue, amt2.issue, index='validated')
             res = send_request(request, node, port)
             verbose = verboseSave
@@ -3083,8 +3087,8 @@ def tx_lookup(line):
                     return m['CreatedNode']['NewFields']['Account']
 
                 # sort by Account if included
-                if 'Account' in filter:
-                    meta = sorted(meta, key=sort_helper)
+                #if 'Account' in filter:
+                #    meta = sorted(meta, key=sort_helper)
                 res['result']['meta']['AffectedNodes'] = meta
             except:
                 pass
@@ -3400,9 +3404,9 @@ def mpt_create(line):
             print(rx.match[1], 'not found')
             return None
         mpt_alias = rx.match[2]
-        if mpt_alias in mpts:
-            print(mpt_alias, 'already defined')
-            return None
+        #if mpt_alias in mpts:
+        #    print(mpt_alias, 'already defined')
+        #    return None
         rest = rx.match[3]
         maxAmt = None
         scale = None
