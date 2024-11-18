@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import gnureadline as readline
+#import gnureadline as readline
+import readline
 import os
 import atexit
 import requests
@@ -515,7 +516,7 @@ class Amount:
         raise Exception('can not multiply amounts')
 
 def fix_comma(s: str):
-    return re.sub(',\s*}', '\n}', s)
+    return re.sub(r',\s*}', '\n}', s)
 
 # convert some fields
 def cvt_fields(json_obj):
@@ -629,7 +630,7 @@ def get_field(field, val, delim=True, asis=False, num=False, rev_delim=False):
 
 def get_with_prefix(prefix, params):
     rx = Re()
-    r = r'' + prefix + '([^\s]+)'
+    r = r'' + prefix + r'([^\s]+)'
     print(r)
     f = None
     if rx.search(r, params):
@@ -1520,7 +1521,7 @@ def oracle_delete_request(secret, account, id):
                  "tx_json": {
                      "Account" : "%s",
                      "OracleDocumentID" : %d,
-                     "TransactionType" : "OracleDelete" 
+                     "TransactionType" : "OracleDelete"
                  }
             }
         ]
@@ -1579,7 +1580,7 @@ def get_mpt_create_request(secret, account, maxAmt=None,
                      "secret": "%s",
                      "tx_json": {
                          "Account" : "%s",
-                         "TransactionType" : "MPTokenIssuanceCreate" 
+                         "TransactionType" : "MPTokenIssuanceCreate"
                          %s
                          %s
                          %s
@@ -1604,8 +1605,8 @@ def get_mpt_auth_request(secret, account, mpt_id, holder=None, flags=None):
                      "secret": "%s",
                      "tx_json": {
                          "Account" : "%s",
-                         "TransactionType" : "MPTokenAuthorize", 
-                         "MPTokenIssuanceID" : "%s" 
+                         "TransactionType" : "MPTokenAuthorize",
+                         "MPTokenIssuanceID" : "%s"
                          %s
                          %s
                      }
@@ -1625,8 +1626,8 @@ def get_mpt_set_request(secret, account, mpt_id, holder=None, flags=None):
                      "secret": "%s",
                      "tx_json": {
                          "Account" : "%s",
-                         "TransactionType" : "MPTokenIssuanceSet", 
-                         "MPTokenIssuanceID" : "%s" 
+                         "TransactionType" : "MPTokenIssuanceSet",
+                         "MPTokenIssuanceID" : "%s"
                          %s
                          %s
                      }
@@ -1646,8 +1647,8 @@ def get_mpt_destroy_request(secret, account, mpt_id):
                      "secret": "%s",
                      "tx_json": {
                          "Account" : "%s",
-                         "TransactionType" : "MPTokenIssuanceDestroy", 
-                         "MPTokenIssuanceID" : "%s" 
+                         "TransactionType" : "MPTokenIssuanceDestroy",
+                         "MPTokenIssuanceID" : "%s"
                      }
                 }
             ]
@@ -3611,7 +3612,7 @@ amm_commands = {'bid': [amm_bid, "amm bid lp hash (min|max) price [acct1,acct2]:
                 amm deposit account alias asset1in @eprice: amm deposit options, alias is an alias for issue1, issue2 from amm create.
                 """],
                 'hash': [amm_hash, "amm hash alias: get amm hash, this is internal command"],
-                'info': [amm_info, "amm info [currency1 currency2] [alias] [account] [\[Amount,Amount2...\]] [$ledger] [save key]: amm info either by token pair of amm alias. can specify the fields to display. can save into internal storage."],
+                'info': [amm_info, "amm info [currency1 currency2] [alias] [account] [[Amount,Amount2...]] [$ledger] [save key]: amm info either by token pair of amm alias. can specify the fields to display. can save into internal storage."],
                 'withdraw': [amm_withdraw, """
                 amm withdraw account alias tokens
                 amm withdraw account alias asset1in
