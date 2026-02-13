@@ -236,6 +236,7 @@ def get_paths(jv):
         paths_str = add_path(paths_str, f"path({path_str})")
     return paths_str
 
+# add transaction argument
 def add_tx_arg(args, name, arg):
     if arg is None:
         return args
@@ -372,6 +373,15 @@ def create_offer(jv):
     offer_cmd = f"\tenv({offer_cmd});"
     do_cmd(offer_cmd)
 
+# cancel offer transaction from Json OfferCancel payload
+def cancel_offer(jv):
+    account = get_account_name(jv['Account'], True)
+    seq = jv['Sequence'] if 'Sequence' in jv else None
+    offer_cmd = f"offer_cancel({account}, {seq})"
+    offer_cmd = add_tx_arg(offer_cmd, "fee", get_tx_fee(jv))
+    offer_cmd = f"\tenv({offer_cmd});"
+    do_cmd(offer_cmd)
+
 with open(payloads_file, "r") as f:
     payloads = json.load(f)
     print("\tEnv env(*this);")
@@ -391,6 +401,8 @@ with open(payloads_file, "r") as f:
                 trustset(p)
             case "OfferCreate":
                 create_offer(p)
+            case "OfferCancel":
+                cancel_offer(p)
             case "Payment":
                 pay(p)
             case _:
