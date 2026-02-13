@@ -13,6 +13,7 @@ fee = None
 
 i = 1
 while i < len(sys.argv):
+    # payload is array or Json transaction payloads
     if sys.argv[i] == '--payload':
         i += 1
         payloads_file = sys.argv[i]
@@ -40,6 +41,8 @@ genesis = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 accounts = defaultdict()
 # counter for account names
 account_counter = 0
+# counter for unique names
+unique_counter = 0
 # counter for MPT issuances
 mpts_counter = 0
 # AMM pair to AMM instance
@@ -60,19 +63,27 @@ def get_asset(jv):
         return mpts[jv['mpt_issuance_id']]
     return "XRP"
 
+def get_asset_and_issuer(jv):
+    asset = get_asset(jv)
+    issuer = jv['issuer'] if 'issuer' in jv else None
+    return [asset, issuer]
+
 # get amount value from Json Amount
 def get_value(jv):
     return jv['value'] if 'value' in jv else jv
 
 # get amount string from Json Amount
-# return XRP(value), Currency(value), or MPTTester(value)
+# return XRP(value), account["Currency"](value), or MPTTester(value)
 def get_amount(jv, fail = False):
     if jv is None:
         if fail:
             raise Exception("missing amount")
         return None
-    asset = get_asset(jv)
+    [asset, issuer] = get_asset_and_issuer(jv)
     value = get_value(jv)
+    if issuer is not None:
+        issuer = get_account_name(issuer, True)
+        return f"{issuer}[\"{asset}\"]({value})"
     return f"{asset}({value})"
 
 # make amm name from asset and asset2
@@ -104,7 +115,7 @@ def do_cmd(tx, close = True):
 # transaction fee
 def get_tx_fee(jv):
     jv_fee = int(jv['Fee']) if 'Fee' in jv else 10
-    return f", fee({jv_fee if fee is None else fee})"
+    return f"{jv_fee if fee is None else fee}"
 
 # create account with given name and fund it with 100k XRP
 def create_account(account, amount = None):
@@ -218,7 +229,7 @@ def get_paths(jv):
             if 'currency' in p and 'issuer' in p:
                 currency = get_asset(p)
                 issuer = get_account_name(p['issuer'], True)
-                path_str = add_path(path_str, f"~{issuer}[\"{currency}\"])")
+                path_str = add_path(path_str, f"~{issuer}[\"{currency}\"]")
             elif 'mpt_issuance_id' in p:
                 mpt = get_asset(p)
                 path_str = add_path(path_str, f"~{mpt}")
@@ -226,10 +237,12 @@ def get_paths(jv):
     return paths_str
 
 def add_tx_arg(args, name, arg):
+    if arg is None:
+        return args
     if name is not None:
         args += f",\n\t\t{name}({arg})"
     else:
-        args += f",\n\t\t({arg})"
+        args += f",\n\t\t{arg}"
     return args
 
 # pay transaction from Json Payment payload
@@ -274,7 +287,7 @@ def account_set(jv):
         flags = jv['ClearFlag']
         do_cmd(f"\tenv(fclear({account}, {flags}));")
     elif 'TransferRate' in jv:
-        rate = float(jv['TransferRate'])/1_000_000_000
+        rate = int(jv['TransferRate'])
         do_cmd(f"env(rate({account}, {rate}));")
     elif 'TickSize' in jv:
         tick_size = jv['TickSize']
@@ -301,6 +314,64 @@ def create_amm(jv):
         trading_fee = f", false, {trading_fee}"
     do_cmd(f"\tAMM {name}(env, {account}, {amount}, {amount2}{trading_fee});")
 
+def get_unique_var():
+    global unique_counter
+    name = f"var{unique_counter}"
+    unique_counter += 1
+    return name
+
+# trustset transaction from Json TrustSet payload
+def trustset(jv):
+    account = get_account_name(jv['Account'])
+    amount = get_amount(jv['LimitAmount'])
+    flags = jv['Flags'] if 'Flags' in jv else None
+    quality_in = jv['QualityIn'] if 'QualityIn' in jv else None
+    quality_out = jv['QualityOut'] if 'QualityOut' in jv else None
+    var = get_unique_var()
+    trust_cmd = f"trust({account}, {amount})"
+    if flags is not None:
+        trust_cmd = add_tx_arg(trust_cmd, "txflags", flags)
+    trust_cmd = add_tx_arg(trust_cmd, "fee", get_tx_fee(jv))
+    print(f"\tauto {var} = env.json({trust_cmd});")
+    if quality_in is not None:
+        print(f"\t{var}[\"QualityIn\"] = {quality_in};")
+    if quality_out is not None:
+        print(f"\t{var}[\"QualityOut\"] = {quality_out};")
+    trust_cmd = f"\tenv({var});"
+    do_cmd(trust_cmd)
+
+'''
+{  
+    "Account" : "r4ToUppGNAVYLyKoDHwqLsdjeiut9eQpDC",
+    "Fee" : "10",
+    "Flags" : 65536,
+    "Sequence" : 10,
+    "SigningPubKey" : "03CE2B85928E2BE5821983891463C704A430786C07AF52AC6819FF65E6B15E96DA",
+    "TakerGets" : {
+       "currency" : "USD",
+       "issuer" : "rJ8PzpT7ej3tXEWaUsVTPy3kQUaHVHdxvp",
+       "value" : "100"
+    }, 
+    "TakerPays" : {
+       "currency" : "EUR",
+       "issuer" : "rUNNH7wFpsRBAc17xTyTfCwZ1os4ZgWxx9",
+       "value" : "100"
+    },
+    "TransactionType" : "OfferCreate",
+    "TxnSignature" :                                                                                              "3045022100FE626D1EACA20649F7A075B864A7D40FAA8CEB28BDF8188B39D09050C62CEB64022025522FF10818EEA3B85C7CD5E09BC4615 02F2972AD710A677E2F461FC06BF18F"
+ } 
+ '''
+def create_offer(jv):
+    account = get_account_name(jv['Account'])
+    taker_pays = get_amount(jv['TakerPays'])
+    taker_gets = get_amount(jv['TakerGets'])
+    flags = jv['Flags'] if 'Flags' in jv else None
+    offer_cmd = f"offer({account}, {taker_pays}, {taker_gets})"
+    offer_cmd = add_tx_arg(offer_cmd, "txflags", flags)
+    offer_cmd = add_tx_arg(offer_cmd, "fee", get_tx_fee(jv))
+    offer_cmd = f"\tenv({offer_cmd});"
+    do_cmd(offer_cmd)
+
 with open(payloads_file, "r") as f:
     payloads = json.load(f)
     print("\tEnv env(*this);")
@@ -316,8 +387,10 @@ with open(payloads_file, "r") as f:
                 create_mptoken_issuance(p)
             case "MPTokenAuthorize":
                 authorize_mptoken(p)
+            case "TrustSet":
+                trustset(p)
             case "OfferCreate":
-                nots[""] = ""
+                create_offer(p)
             case "Payment":
                 pay(p)
             case _:
