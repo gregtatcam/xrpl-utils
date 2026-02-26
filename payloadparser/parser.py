@@ -4,6 +4,8 @@ from xrpl.core import addresscodec
 import json
 import sys
 
+from xrpl.models.requests.ledger_entry import Offer
+
 # Json payloads file
 payloads_file = None
 # no env.close() after each transaction
@@ -43,13 +45,6 @@ accounts = defaultdict()
 account_counter = 0
 # counter for unique names
 unique_counter = 0
-# counter for MPT issuances
-mpts_counter = 0
-# AMM pair to AMM instance
-amms = defaultdict()
-# MPT ID to MPTTester instance
-mpts = defaultdict()
-nots = defaultdict()
 
 # get asset name from Json Amount or Asset object
 # return XRP, Currency, or MPTTester instance
@@ -58,10 +53,13 @@ def get_asset(jv):
         return jv['currency']
     # it must have been created with MPTokenIssuanceCreate
     elif 'mpt_issuance_id' in jv:
-        if not jv['mpt_issuance_id'] in mpts:
+        if not jv['mpt_issuance_id'] in MPT.mpts:
             raise Exception("unknown MPT issuance: " + jv['mpt_issuance_id'])
-        return mpts[jv['mpt_issuance_id']]
+        return MPT.mpts[jv['mpt_issuance_id']]
     return "XRP"
+
+def get_field(jv, field, default = None):
+    return jv[field] if field in jv else (default if default is not None else None)
 
 def get_asset_and_issuer(jv):
     asset = get_asset(jv)
@@ -74,21 +72,18 @@ def get_value(jv):
 
 # get amount string from Json Amount
 # return XRP(value), account["Currency"](value), or MPTTester(value)
-def get_amount(jv, fail = False):
-    if jv is None:
+def get_amount(jv, field, fail = False, default = None):
+    v = get_field(jv, field)
+    if v is None:
         if fail:
             raise Exception("missing amount")
-        return None
-    [asset, issuer] = get_asset_and_issuer(jv)
-    value = get_value(jv)
+        return None if default is None else default
+    [asset, issuer] = get_asset_and_issuer(v)
+    value = get_value(v)
     if issuer is not None:
         issuer = get_account_name(issuer, True)
         return f"{issuer}[\"{asset}\"]({value})"
     return f"{asset}({value})"
-
-# make amm name from asset and asset2
-def make_amm_name(asset, asset2):
-    return f"{asset}_{asset2}" if asset > asset2 else f"{asset2}_{asset}"
 
 # make account name from account
 # store AccountID to account name in accounts
@@ -106,16 +101,19 @@ def env_close():
     if not no_close:
         print("\tenv.close();")
 
-# transaction
-def do_cmd(tx, close = True):
-    print(tx)
-    if close:
-        env_close()
-
 # transaction fee
 def get_tx_fee(jv):
     jv_fee = int(jv['Fee']) if 'Fee' in jv else 10
     return f"{jv_fee if fee is None else fee}"
+
+# transaction
+def do_cmd(tx, jv = None, close = True):
+    if jv is not None:
+        tx = add_tx_arg(tx, "txflags", get_field(jv, 'Flags'))
+        tx = add_tx_arg(tx, "fee", get_tx_fee(jv))
+    print(f"\tenv({tx});")
+    if close:
+        env_close()
 
 # create account with given name and fund it with 100k XRP
 def create_account(account, amount = None):
@@ -123,7 +121,7 @@ def create_account(account, amount = None):
     name = make_account(account)
     amount = amount if amount is not None else "XRP(\"100\'000\")"
     print(f"\tAccount const {name}(\"{name}\");")
-    do_cmd(f"\tenv.fund({amount}, {name});")
+    print(f"\tenv.fund({amount}, {name});")
 
 # get account name from account ID or create it
 def get_account_name(account, fail = False):
@@ -141,73 +139,22 @@ def get_account_name(account, fail = False):
 
 # add comma-separated argument to string
 def add_arg(args, name, arg):
-    a = f".{name} = {arg}"
+    if arg is None:
+        return args
+    a = f".{name} = {arg}" if name is not (None or "") else f"{arg}"
     if args != "":
-        args += f", {a}"
+        args += f", \n\t\t{a}"
     else:
         args = a
     return args
 
-# make MPTTester name from sequence and account ID
-# return name and issuance ID
-def make_mpttester_name(sequence, account):
-    global mpts_counter
-    account_id_bytes = addresscodec.decode_classic_address(account)
-    account_id_hex = account_id_bytes.hex().upper()
-    issuance_id = f"{sequence:08x}{account_id_hex}"
-    name = f"MPT{mpts_counter}"
-    mpts[issuance_id] = name
-    mpts_counter += 1
-    return [name, issuance_id]
+def make_unique_var():
+    global unique_counter
+    name = f"var{unique_counter}"
+    unique_counter += 1
+    return name
 
-# create MPTTester instance given MPTokenIssuanceCreate payload
-def create_mptoken_issuance(jv):
-    global mpts_counter
-    # transaction must have Sequence
-    if not 'Sequence' in jv:
-        raise Exception("missing Sequence")
-    sequence = int(jv['Sequence'])
-    max_amount = jv['MaximumAmount'] if 'MaximumAmount' in jv else None
-    flags = jv['Flags'] if 'Flags' in jv else None
-    transfer_fee = jv['TransferFee'] if 'TransferFee' in jv else None
-    asset_scale = jv['AssetScale'] if 'AssetScale' in jv else None
-    domain_id = jv['DomainID'] if 'DomainID' in jv else None
-    metadata = jv['MPTokenMetadata'] if 'MPTokenMetadata' in jv else None
-    account = jv['Account']
-    [name, issuance_id] = make_mpttester_name(sequence, account)
-    account = get_account_name(account)
-    create_arg = ""
-    if max_amount is not None:
-        create_arg = add_arg("", "maxAmt", max_amount)
-    if asset_scale is not None:
-        create_arg = add_arg(create_arg, "assetScale", asset_scale)
-    if transfer_fee is not None:
-        create_arg = add_arg(create_arg, "transferFee", transfer_fee)
-    if metadata is not None:
-        create_arg = add_arg(create_arg, "metadata", f"\"{metadata}\"")
-    if flags is not None:
-        create_arg = add_arg(create_arg, "flags", flags)
-    if domain_id is not None:
-        create_arg = add_arg(create_arg, "domainID", domain_id)
-    cmd = f"\tMPTTester {name}(env, {account}, MPTInit{{.fund = false, .create = MPTCreate{{{create_arg}}}}});"
-    do_cmd(cmd, False)
 
-# authorize MPToken instance given MPTokenAuthorize payload
-def authorize_mptoken(jv):
-    account = get_account_name(jv['Account'])
-    issuance_id = jv['MPTokenIssuanceID']
-    if not issuance_id in mpts:
-        raise Exception("unknown MPT issuance ID: " + issuance_id)
-    mpt = mpts[issuance_id]
-    flags = jv['Flags'] if 'Flags' in jv else None
-    holder = get_account_name(jv['Holder'] if 'Holder' in jv else None)
-    authorize_arg = f".account = {account}"
-    if holder is not None:
-        authorize_arg = add_arg(authorize_arg, "holder", holder)
-    if flags is not None and flags != 0:
-        authorize_arg = add_arg(authorize_arg, "flags", flags)
-    cmd = f"\t{mpt}.authorize(MPTAuthorize{{{authorize_arg}}});"
-    do_cmd(cmd, False)
 
 # add a comma-separated path to string
 def add_path(path_str, path):
@@ -217,6 +164,8 @@ def add_path(path_str, path):
 
 # create a comma-separated list of paths from Json Paths array
 def get_paths(jv):
+    if jv is None:
+        return None
     if jv == '':
         raise Exception("empty paths")
     paths_str = ""
@@ -246,10 +195,191 @@ def add_tx_arg(args, name, arg):
         args += f",\n\t\t{arg}"
     return args
 
+def cmd_from_arg(jv, cmd, arg, brackets = True):
+    var = make_unique_var()
+    if brackets:
+        print(f"\tauto {var} = {cmd}({{{arg}}});")
+    else:
+        print(f"\tauto {var} = {cmd}({arg});")
+    do_cmd(var, jv)
+
+
+class AMM:
+    instances = defaultdict()
+    def __init__(self, asset, asset2):
+        self.asset = asset
+        self.asset2 = asset2
+
+    @staticmethod
+    def get_AMM(jv, create = False):
+        asset = get_asset(jv['Amount'])
+        asset2 = get_asset(jv['Amount2'])
+        fail_exists = create
+        fail_not_exists = not create
+        name = AMM.make_name(asset, asset2, fail_exists, fail_not_exists)
+        if create:
+            AMM.instances[name] = AMM(asset, asset2)
+        return AMM.instances[name]
+
+    @staticmethod
+    def make_name(asset, asset2, fail_exists=False, fail_not_exists=False):
+        name = f"{asset}_{asset2}" if asset > asset2 else f"{asset2}_{asset}"
+        if fail_exists and name in AMM.instances:
+            raise Exception("AMM already created: " + name)
+        if fail_not_exists and name not in AMM.instances:
+            raise Exception("AMM does not exist: " + name)
+        return name
+
+    def create(self, jv):
+        arg = add_arg("", "", get_account_name(jv['Account']))
+        arg = add_arg(arg, "", get_amount(jv, 'Amount'))
+        arg = add_arg(arg, "", get_amount(jv, 'Amount2'))
+        arg = add_arg(arg, "", get_field(jv, 'TradingFee', 0))
+        cmd_from_arg(jv, "AMM::createJv", arg, False)
+
+    def deposit(self, jv):
+        arg = add_arg("", "account", get_account_name(jv['Account']))
+        arg = add_arg(arg, "tokens", get_field(jv, 'LPTokenOut'))
+        arg = add_arg(arg, "asset1In", get_amount(jv, 'Amount'))
+        arg = add_arg(arg, "asset2In", get_amount(jv, 'Amount2'))
+        arg = add_arg(arg, "maxEP", get_amount(jv, 'EPrice'))
+        assets = f"{{{self.asset}, {self.asset2}}}"
+        arg = add_arg(arg, "assets", assets)
+        arg = add_arg(arg, "tfee", get_field(jv, 'TradingFee'))
+        cmd_from_arg(jv, "AMM::depositJv", arg)
+
+    def withdraw(self, jv):
+        arg = add_arg("", "account", get_account_name(jv['Account']))
+        arg = add_arg(arg, "tokens", get_field(jv, 'LPTokenIn'))
+        arg = add_arg(arg, "asset1Out", get_amount(jv, 'Amount'))
+        arg = add_arg(arg, "asset2Out", get_amount(jv, 'Amount2'))
+        arg = add_arg(arg, "maxEP", get_amount(jv, 'EPrice'))
+        assets = f"{{{self.asset}, {self.asset2}}}"
+        arg = add_arg(arg, "assets", assets)
+        arg = add_arg(arg, "tfee", get_field(jv, 'TradingFee'))
+        cmd_from_arg(jv, "AMM::withdrawJv", arg)
+
+    def clawback(self, jv):
+        arg = add_arg("", "", get_account_name(jv['Account']))
+        arg = add_arg(arg, "", get_account_name(jv['Holder']))
+        arg = add_arg(arg, "", get_field(jv, 'Asset'))
+        arg = add_arg(arg, "", get_field(jv, 'Asset2'))
+        arg = add_arg(arg, "", get_amount(jv, 'Amount', default = "std::nullopt"))
+        cmd_from_arg(jv, "amm::ammClawback", arg, True)
+
+    def delete(self, jv):
+        arg = add_arg("", "", get_account_name(jv['Account']))
+        arg = add_arg(arg, "", get_field(jv, 'Asset'))
+        arg = add_arg(arg, "", get_field(jv, 'Asset2'))
+        cmd_from_arg(jv, "AMM::deleteJv", arg)
+
+    def vote(self, jv):
+        arg = add_arg("", "account", get_account_name(jv['Account']))
+        arg = add_arg(arg, "tfee", get_field(jv, 'TradingFee'))
+        assets = f"{{{self.asset}, {self.asset2}}}"
+        arg = add_arg(arg, "assets", assets)
+        cmd_from_arg(jv, "AMM::voteJv", arg)
+
+    @staticmethod
+    def get_auth_accounts(jv):
+        authAccounts = get_field(jv, 'AuthAccounts')
+        if authAccounts is not None:
+            jv = json.loads(authAccounts)
+            authAccounts = "{"
+            for authAccount in jv:
+                authAccounts = add_arg(authAccounts, None, authAccount)
+            authAccounts += "}"
+        return authAccounts
+
+    def bid(self, jv):
+        arg = add_arg("", "account", get_account_name(jv['Account']))
+        arg = add_arg(arg, "tokens", get_field(jv, 'LPTokenIn'))
+        arg = add_arg(arg, "bidMin", get_amount(jv, 'BidMin'))
+        arg = add_arg(arg, "bidMax", get_amount(jv, 'BidMax'))
+        authAccounts = self.get_auth_accounts(jv)
+        arg = add_arg(arg, "authAccounts", authAccounts)
+        assets = f"{{{self.asset}, {self.asset2}}}"
+        arg = add_arg(arg, "assets", assets)
+        cmd_from_arg(jv, "AMM::bidJv", arg)
+
+class MPT:
+    mpts = defaultdict()
+    instances = defaultdict()
+    def __init__(self, issuance_id):
+        self.issuance_id = issuance_id
+        self.test_issuance_id = f"{MPT.mpts[issuance_id]}.mpt()"
+
+    @staticmethod
+    def get_MPT(jv, create = False):
+        if create:
+            issuance_id = MPT.make_issuance_id(jv['Sequence'], jv['Account'])
+        else:
+            issuance_id = get_field(jv, 'MPTokenIssuanceID')
+        if create:
+            if issuance_id in MPT.mpts:
+                raise Exception("MPT already created: " + issuance_id)
+            MPT.create_mpt(jv)
+            MPT.instances[issuance_id] = MPT(issuance_id)
+        elif not issuance_id in MPT.mpts:
+            raise Exception("MPT does not exist: " + issuance_id)
+        return MPT.instances[issuance_id]
+
+    @staticmethod
+    def make_issuance_id(sequence, account):
+        account_id_bytes = addresscodec.decode_classic_address(account)
+        account_id_hex = account_id_bytes.hex().upper()
+        issuance_id = f"{sequence:08x}{account_id_hex}"
+        return issuance_id
+
+    @staticmethod
+    def create_mpt(jv):
+        account = jv['Account']
+        if not 'Sequence' in jv:
+            raise Exception("missing Sequence in MPTTester payload")
+        sequence = jv['Sequence']
+        issuance_id = MPT.make_issuance_id(sequence, account)
+        name = make_unique_var()
+        account = get_account_name(account, True)
+        # MPT(std::string const& n, xrpl::MPTID const& issuanceID_)
+        print(f"\tauto {name} = MPT(\"\", makeMptID(env.seq({account}), {account}));")
+        MPT.mpts[issuance_id] = name
+
+    # create MPTTester instance given MPTokenIssuanceCreate payload
+    def create(self, jv):
+        arg = add_arg("", "issuer", get_account_name(jv['Account']))
+        arg = add_arg(arg, "maxAmt", get_field(jv, 'MaximumAmount'))
+        arg = add_arg(arg, "assetScale", get_field(jv, 'AssetScale'))
+        arg = add_arg(arg, "transferFee", get_field(jv, 'TransferFee'))
+        arg = add_arg(arg, "metadata", get_field(jv, 'MPTokenMetadata'))
+        arg = add_arg(arg, "domainID", get_field(jv, 'DomainID'))
+        cmd_from_arg(jv, "MPTTester::createJV", arg)
+
+    def authorize(self, jv):
+        arg = add_arg("", "account", get_account_name(jv['Account']))
+        arg = add_arg(arg, "holder", get_account_name(get_field(jv, 'Holder')))
+        arg = add_arg(arg, "id", self.test_issuance_id)
+        cmd_from_arg(jv, "MPTTester::authorizeJV", arg)
+
+    def set(self, jv):
+        arg = add_arg("", "account", get_account_name(jv['Account']))
+        arg = add_arg(arg, "holder", get_account_name(jv['Holder']))
+        arg = add_arg(arg, "id", self.test_issuance_id)
+        arg = add_arg(arg, "mutableFlags", get_field(jv, 'MutableFlags'))
+        arg = add_arg(arg, "transferFee", get_field(jv, 'TransferFee'))
+        arg = add_arg(arg, "metadata", get_field(jv, 'MPTokenMetadata'))
+        arg = add_arg(arg, "delegate", get_field(jv, 'Delegate'))
+        arg = add_arg(arg, "domainID", get_field(jv, 'DomainID'))
+        cmd_from_arg(jv, "MPTTester::setJV", arg)
+
+    def destroy(self, jv):
+        arg = add_arg("", "account", get_account_name(jv['Account']))
+        arg = add_arg(arg, "id", self.test_issuance_id)
+        cmd_from_arg(jv, "MPTTester::destroyJV", arg)
+
 # pay transaction from Json Payment payload
 def pay(jv):
     account = get_account_name(jv['Account'], True)
-    amount = get_amount(jv['Amount'], True)
+    amount = get_amount(jv, 'Amount', True)
     dest = jv['Destination']
     # create an account
     if account == genesis:
@@ -258,129 +388,94 @@ def pay(jv):
         create_account(dest, amount)
         return
     dest = get_account_name(dest)
-    pay_cmd = f"pay({account}, {dest}, {amount})"
-    if 'Flags' in jv:
-        pay_cmd = add_tx_arg(pay_cmd, "txflags", jv['Flags'])
-    if 'SendMax' in jv:
-        pay_cmd = add_tx_arg(pay_cmd, "sendmax", get_amount(jv['SendMax']))
-    if 'DeliverMin' in jv:
-        pay_cmd = add_tx_arg(pay_cmd, "deliver_min", get_amount(jv['DeliverMin']))
-    if 'DomainID' in jv:
-        pay_cmd = add_tx_arg("pay_cmd, domain", jv['DomainID'])
-    if 'DestinationTag' in jv:
-        pay_cmd = add_tx_arg(pay_cmd, "dest_tag", jv['DestinationTag'])
+    cmd = f"pay({account}, {dest}, {amount})"
+    cmd = add_tx_arg(cmd, "sendmax", get_amount(jv, 'SendMax'))
+    cmd = add_tx_arg(cmd, "deliver_min", get_amount(jv, 'DeliverMin'))
+    cmd = add_tx_arg(cmd, "domain", get_field(jv, 'DomainID'))
+    cmd = add_tx_arg(cmd, "dest_tag", get_field(jv, 'DestinationTag'))
+    cmd = add_tx_arg(cmd, None, get_paths(get_field(jv, 'Paths')))
     if 'DeliverMax' in jv:
         raise Exception("unsupported DeliverMax " + jv)
-    if 'Paths' in jv:
-        pay_cmd = add_tx_arg(pay_cmd, None, get_paths(jv['Paths']))
     if 'CredentialIDs' in jv:
         raise Exception("unsupported CredentialIDs " + jv)
-    pay_cmd = f"\tenv({pay_cmd});"
-    do_cmd(pay_cmd)
+    do_cmd(cmd, jv)
 
 # currently supported SetFlag, ClearFlag, TransferRate, TickSize
 def account_set(jv):
     account = get_account_name(jv['Account'])
     if 'SetFlag' in jv:
         flags = jv['SetFlag']
-        do_cmd(f"\tenv(fset({account}, {flags}));")
+        do_cmd(f"fset({account}, {flags})")
     elif 'ClearFlag' in jv:
         flags = jv['ClearFlag']
-        do_cmd(f"\tenv(fclear({account}, {flags}));")
+        do_cmd(f"fclear({account}, {flags})")
     elif 'TransferRate' in jv:
         rate = int(jv['TransferRate'])
-        do_cmd(f"env(rate({account}, {rate}));")
+        do_cmd(f"rate({account}, {rate})")
     elif 'TickSize' in jv:
         tick_size = jv['TickSize']
-        print(f"\t{{")
-        print(f"\t\tauto txn = noop({account});")
-        print(f"\t\ttxn[sfTickSize.fieldName] = {tick_size};")
-        print("\t\tenv(txn);")
-        print("\t\tenv.close();")
-        print(f"}}")
+        var = make_unique_var()
+        print(f"\tauto {var} = noop({account});")
+        print(f"\t{var}[sfTickSize.fieldName] = {tick_size};")
+        do_cmd(var)
     else:
         raise Exception("unsupported account set : " + jv)
-
-# create AMM instance from AMMCreate payload
-def create_amm(jv):
-    account = get_account_name(jv['Account'])
-    amount = get_amount(jv['Amount'])
-    amount2 = get_amount(jv['Amount2'])
-    name = make_amm_name(get_asset(jv['Amount']), get_asset(jv['Amount2']))
-    if name in amms:
-        raise Exception("AMM already created: " + name)
-    amms[name] = True
-    trading_fee = jv['TradingFee'] if 'TradingFee' in jv else 0
-    if trading_fee is not None:
-        trading_fee = f", false, {trading_fee}"
-    do_cmd(f"\tAMM {name}(env, {account}, {amount}, {amount2}{trading_fee});")
-
-def get_unique_var():
-    global unique_counter
-    name = f"var{unique_counter}"
-    unique_counter += 1
-    return name
 
 # trustset transaction from Json TrustSet payload
 def trustset(jv):
     account = get_account_name(jv['Account'])
-    amount = get_amount(jv['LimitAmount'])
-    flags = jv['Flags'] if 'Flags' in jv else None
+    amount = get_amount(jv, 'LimitAmount')
     quality_in = jv['QualityIn'] if 'QualityIn' in jv else None
     quality_out = jv['QualityOut'] if 'QualityOut' in jv else None
-    var = get_unique_var()
-    trust_cmd = f"trust({account}, {amount})"
-    if flags is not None:
-        trust_cmd = add_tx_arg(trust_cmd, "txflags", flags)
-    trust_cmd = add_tx_arg(trust_cmd, "fee", get_tx_fee(jv))
-    print(f"\tauto {var} = env.json({trust_cmd});")
+    var = make_unique_var()
+    cmd = f"trust({account}, {amount})"
+    print(f"\tauto {var} = env.json({cmd});")
     if quality_in is not None:
         print(f"\t{var}[\"QualityIn\"] = {quality_in};")
     if quality_out is not None:
         print(f"\t{var}[\"QualityOut\"] = {quality_out};")
-    trust_cmd = f"\tenv({var});"
-    do_cmd(trust_cmd)
+    do_cmd(var, jv)
 
-'''
-{  
-    "Account" : "r4ToUppGNAVYLyKoDHwqLsdjeiut9eQpDC",
-    "Fee" : "10",
-    "Flags" : 65536,
-    "Sequence" : 10,
-    "SigningPubKey" : "03CE2B85928E2BE5821983891463C704A430786C07AF52AC6819FF65E6B15E96DA",
-    "TakerGets" : {
-       "currency" : "USD",
-       "issuer" : "rJ8PzpT7ej3tXEWaUsVTPy3kQUaHVHdxvp",
-       "value" : "100"
-    }, 
-    "TakerPays" : {
-       "currency" : "EUR",
-       "issuer" : "rUNNH7wFpsRBAc17xTyTfCwZ1os4ZgWxx9",
-       "value" : "100"
-    },
-    "TransactionType" : "OfferCreate",
-    "TxnSignature" :                                                                                              "3045022100FE626D1EACA20649F7A075B864A7D40FAA8CEB28BDF8188B39D09050C62CEB64022025522FF10818EEA3B85C7CD5E09BC4615 02F2972AD710A677E2F461FC06BF18F"
- } 
- '''
-def create_offer(jv):
-    account = get_account_name(jv['Account'])
-    taker_pays = get_amount(jv['TakerPays'])
-    taker_gets = get_amount(jv['TakerGets'])
-    flags = jv['Flags'] if 'Flags' in jv else None
-    offer_cmd = f"offer({account}, {taker_pays}, {taker_gets})"
-    offer_cmd = add_tx_arg(offer_cmd, "txflags", flags)
-    offer_cmd = add_tx_arg(offer_cmd, "fee", get_tx_fee(jv))
-    offer_cmd = f"\tenv({offer_cmd});"
-    do_cmd(offer_cmd)
+class Offer:
+    # need mapping issuer, get, pays, sequence -> test sequence
+    # in order to cancel the offer
+    offers = defaultdict()
+    instances = defaultdict()
+    def __init__(self, jv):
+        self.jv = jv
+        self.sequence = None
 
-# cancel offer transaction from Json OfferCancel payload
-def cancel_offer(jv):
-    account = get_account_name(jv['Account'], True)
-    seq = jv['Sequence'] if 'Sequence' in jv else None
-    offer_cmd = f"offer_cancel({account}, {seq})"
-    offer_cmd = add_tx_arg(offer_cmd, "fee", get_tx_fee(jv))
-    offer_cmd = f"\tenv({offer_cmd});"
-    do_cmd(offer_cmd)
+    @staticmethod
+    def get_offer(jv, create = False):
+        account = jv['Account']
+        taker_pays = jv['TakerPays']
+        taker_gets = jv['TakerGets']
+        sequence = jv['Sequence']
+        key = f"{account}, {taker_pays}, {taker_gets}, {sequence}"
+        if create:
+            if key in Offer.offers:
+                raise Exception("offer already created: " + jv)
+            Offer.instances[key] = Offer(jv)
+        elif key not in Offer.offers:
+            raise Exception("offer does not exist: " + key)
+        return Offer.instances[key]
+
+    def create(self, jv):
+        account = get_account_name(jv['Account'])
+        taker_pays = get_amount(jv, 'TakerPays')
+        taker_gets = get_amount(jv, 'TakerGets')
+        var = make_unique_var()
+        print(f"\tauto {var} = env.seq({account});")
+        self.sequence = var
+        cmd = f"offer({account}, {taker_pays}, {taker_gets})"
+        do_cmd(cmd, jv)
+
+    # cancel offer transaction from Json OfferCancel payload
+    def cancel(self, jv):
+        account = get_account_name(jv['Account'], True)
+        seq = self.sequence
+        cmd = f"offer_cancel({account}, {seq})"
+        do_cmd(cmd, jv)
 
 with open(payloads_file, "r") as f:
     payloads = json.load(f)
@@ -392,17 +487,46 @@ with open(payloads_file, "r") as f:
             case "AccountSet":
                 account_set(p)
             case "AMMCreate":
-                create_amm(p)
+                amm = AMM.get_AMM(p, create = True)
+                amm.create(p)
+            case "AMMDeposit":
+                amm = AMM.get_AMM(p)
+                amm.deposit(p)
+            case "AMMWithdraw":
+                amm = AMM.get_AMM(p)
+                amm.withdraw(p)
+            case "AMMDelete":
+                amm = AMM.get_AMM(p)
+                amm.delete(p)
+            case "AMMClawback":
+                amm = AMM.get_AMM(p)
+                amm.clawback(p)
+            case "AMMVote":
+                amm = AMM.get_AMM(p)
+                amm.vote(p)
+            case "AMMBid":
+                amm = AMM.get_AMM(jv = p)
+                amm.bid(p)
             case "MPTokenIssuanceCreate":
-                create_mptoken_issuance(p)
+                mpt = MPT.get_MPT(p, create = True)
+                mpt.create(p)
             case "MPTokenAuthorize":
-                authorize_mptoken(p)
+                mpt = MPT.get_MPT(p)
+                mpt.authorize(p)
+            case "MPTokenIssuanceSet":
+                mpt = MPT.get_MPT(p)
+                mpt.set(p)
+            case "MPTokenIssuanceDestroy":
+                mpt = MPT.get_MPT(p)
+                mpt.destroy(p)
             case "TrustSet":
                 trustset(p)
             case "OfferCreate":
-                create_offer(p)
+                offer = Offer.get_offer(p, create = True)
+                offer.create(p)
             case "OfferCancel":
-                cancel_offer(p)
+                offer = Offer.get_offer(p)
+                offer.cancel(p)
             case "Payment":
                 pay(p)
             case _:
