@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from collections import defaultdict
 from xrpl.core import addresscodec
+import hashlib
+from xrpl.core.addresscodec import decode_classic_address
 import json
 import sys
 
@@ -268,6 +270,7 @@ class AMM:
         cmd_from_arg(jv, "amm::ammClawback", arg, True)
 
     def delete(self, jv):
+        # TODO remove from instances
         arg = add_arg("", "", get_account_name(jv['Account']))
         arg = add_arg(arg, "", get_field(jv, 'Asset'))
         arg = add_arg(arg, "", get_field(jv, 'Asset2'))
@@ -372,9 +375,122 @@ class MPT:
         cmd_from_arg(jv, "MPTTester::setJV", arg)
 
     def destroy(self, jv):
+        # TODO remove from instances
         arg = add_arg("", "account", get_account_name(jv['Account']))
         arg = add_arg(arg, "id", self.test_issuance_id)
         cmd_from_arg(jv, "MPTTester::destroyJV", arg)
+
+class Offer:
+    # need mapping issuer, get, pays, sequence -> test sequence
+    # in order to cancel the offer
+    offers = defaultdict()
+    instances = defaultdict()
+
+    def __init__(self, jv):
+        self.jv = jv
+        self.sequence = None
+
+    @staticmethod
+    def get_offer(jv, create=False):
+        account = jv['Account']
+        taker_pays = jv['TakerPays']
+        taker_gets = jv['TakerGets']
+        sequence = jv['Sequence']
+        key = f"{account}, {taker_pays}, {taker_gets}, {sequence}"
+        if create:
+            if key in Offer.offers:
+                raise Exception("offer already created: " + jv)
+            Offer.instances[key] = Offer(jv)
+        elif key not in Offer.offers:
+            raise Exception("offer does not exist: " + key)
+        return Offer.instances[key]
+
+    def create(self, jv):
+        account = get_account_name(jv['Account'])
+        taker_pays = get_amount(jv, 'TakerPays')
+        taker_gets = get_amount(jv, 'TakerGets')
+        var = make_unique_var()
+        print(f"\tauto {var} = env.seq({account});")
+        self.sequence = var
+        cmd = f"offer({account}, {taker_pays}, {taker_gets})"
+        do_cmd(cmd, jv)
+
+    def cancel(self, jv):
+        # TODO remove from instances
+        account = get_account_name(jv['Account'], True)
+        seq = self.sequence
+        cmd = f"offer_cancel({account}, {seq})"
+        do_cmd(cmd, jv)
+
+class Check:
+    checks = defaultdict()
+    instances = defaultdict()
+    def __init__(self, check_id):
+        self.check_id = check_id
+
+    @staticmethod
+    def calculate_check_id(account, sequence):
+        # 1. Prefix for 'Check' space (0x0043)
+        check_space_key = bytes.fromhex("0043")
+        # 2. Convert an address to its 20-byte AccountID
+        account_id = decode_classic_address(account)
+        # 3. Convert sequence to 4-byte big-endian
+        sequence_bytes = sequence.to_bytes(4, byteorder='big')
+        # Concatenate and Hash
+        data = check_space_key + account_id + sequence_bytes
+        # SHA-512Half: Take the first 32 bytes (64 hex chars) of a SHA-512 hash
+        check_id = hashlib.sha512(data).hexdigest()[:64].upper()
+        return check_id
+
+    @staticmethod
+    def create_check_id(jv):
+        account = jv['Account']
+        sequence = jv['Sequence']
+        var = make_unique_var()
+        key = Check.calculate_check_id(account, sequence)
+        print(f"uint256 const {var}(getCheckIndex({account}, env.seq({account})));")
+        if key in Check.checks:
+            raise Exception("check already created: " + jv)
+        Check.checks[key] = var
+        return var
+
+    @staticmethod
+    def get_check(jv, create=False):
+        account = jv['Account']
+        sequence = jv['Sequence']
+        # check id from the payload
+        key = Check.calculate_check_id(account, sequence)
+        if create:
+            if key in Check.instances:
+                raise Exception("check already created: " + jv)
+            # check id in the unit-test
+            check_id = Check.create_check_id(jv)
+            Check.checks[key] = Check(check_id)
+        elif key not in Check.instances:
+            raise Exception("check does not exist: " + key)
+        return Check.instances[key]
+
+    def create(self, jv):
+        account = get_account_name(jv['Account'])
+        destination = get_account_name(jv['Destination'])
+        send_max = get_field(jv, 'Destinations')
+        cmd = f"check::create({account}, {destination}, {send_max})"
+        cmd = add_tx_arg(cmd, "dest_tag", get_field(jv, 'DestinationTag'))
+        cmd = add_tx_arg(cmd, "expiration", get_field(jv, 'Expiration'))
+        cmd = add_tx_arg(cmd, "invoice_id", get_field('InvoiceID'))
+        do_cmd(cmd, jv)
+
+    def cash(self, jv):
+        account = get_account_name(jv['Account'])
+        if 'Amount' in jv:
+            cmd = f"check::cash({account}, {self.check_id}, {get_amount(jv, 'Amount')})"
+        else:
+            cmd = f"check::cash({account}, {self.check_id}, DeliverMin({get_amount(jv, 'DeliverMin')}))"
+        do_cmd(cmd, jv)
+
+    def cancel(self, jv):
+        cmd = f"check::cancel({get_account_name(jv['Account'])}{self.check_id})"
+        do_cmd(cmd, jv)
 
 # pay transaction from Json Payment payload
 def pay(jv):
@@ -435,47 +551,6 @@ def trustset(jv):
     if quality_out is not None:
         print(f"\t{var}[\"QualityOut\"] = {quality_out};")
     do_cmd(var, jv)
-
-class Offer:
-    # need mapping issuer, get, pays, sequence -> test sequence
-    # in order to cancel the offer
-    offers = defaultdict()
-    instances = defaultdict()
-    def __init__(self, jv):
-        self.jv = jv
-        self.sequence = None
-
-    @staticmethod
-    def get_offer(jv, create = False):
-        account = jv['Account']
-        taker_pays = jv['TakerPays']
-        taker_gets = jv['TakerGets']
-        sequence = jv['Sequence']
-        key = f"{account}, {taker_pays}, {taker_gets}, {sequence}"
-        if create:
-            if key in Offer.offers:
-                raise Exception("offer already created: " + jv)
-            Offer.instances[key] = Offer(jv)
-        elif key not in Offer.offers:
-            raise Exception("offer does not exist: " + key)
-        return Offer.instances[key]
-
-    def create(self, jv):
-        account = get_account_name(jv['Account'])
-        taker_pays = get_amount(jv, 'TakerPays')
-        taker_gets = get_amount(jv, 'TakerGets')
-        var = make_unique_var()
-        print(f"\tauto {var} = env.seq({account});")
-        self.sequence = var
-        cmd = f"offer({account}, {taker_pays}, {taker_gets})"
-        do_cmd(cmd, jv)
-
-    # cancel offer transaction from Json OfferCancel payload
-    def cancel(self, jv):
-        account = get_account_name(jv['Account'], True)
-        seq = self.sequence
-        cmd = f"offer_cancel({account}, {seq})"
-        do_cmd(cmd, jv)
 
 with open(payloads_file, "r") as f:
     payloads = json.load(f)
