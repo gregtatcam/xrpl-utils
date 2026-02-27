@@ -156,7 +156,14 @@ def make_unique_var():
     unique_counter += 1
     return name
 
+def env_json(jv):
+    var = make_unique_var()
+    print(f"\tauto {var} = env.json({jv});")
+    return var
 
+def add_json(jv, field, value):
+    if value is not None:
+        print(f"\t{jv}[\"{field}\"] = {value};")
 
 # add a comma-separated path to string
 def add_path(path_str, path):
@@ -492,6 +499,37 @@ class Check:
         cmd = f"check::cancel({get_account_name(jv['Account'])}{self.check_id})"
         do_cmd(cmd, jv)
 
+class Credential:
+    def __init__(self):
+        pass
+
+    def create(self, jv):
+        issuer = get_account_name(jv['Account'])
+        subject = get_account_name(jv['Subject'])
+        credential_type = get_field(jv, 'CredentialType')
+        cmd = f"cred::create({subject}, {issuer}, {credential_type})"
+        cmd = add_tx_arg(cmd, "credentials::uri", get_field(jv, 'URI'))
+        var = env_json(cmd)
+        add_json(var, "Expiration", get_field(jv, 'Expiration'))
+        do_cmd(var, jv)
+
+    def accept(self, jv):
+        subject = get_account_name(jv['Account'])
+        issuer = get_account_name(jv['Issuer'])
+        credential_type = get_field(jv, 'CredentialType')
+        cmd = f"cred::accept({subject}, {issuer}, {credential_type})"
+        do_cmd(cmd, jv)
+
+    def delete(self, jv):
+        account = get_account_name(jv['Account'])
+        credential_type = get_field(jv, 'CredentialType')
+        subject = get_account_name(get_field(jv, 'Subject'))
+        issuer = get_account_name(get_field(jv, 'Issuer'))
+        subject = subject if subject is not None else account
+        issuer = issuer if issuer is not None else account
+        cmd = f"credentials::deleteCred({account}, {subject}, {issuer}, {credential_type})"
+        do_cmd(cmd, jv)
+
 # pay transaction from Json Payment payload
 def pay(jv):
     account = get_account_name(jv['Account'], True)
@@ -510,10 +548,9 @@ def pay(jv):
     cmd = add_tx_arg(cmd, "domain", get_field(jv, 'DomainID'))
     cmd = add_tx_arg(cmd, "dest_tag", get_field(jv, 'DestinationTag'))
     cmd = add_tx_arg(cmd, None, get_paths(get_field(jv, 'Paths')))
+    cmd = add_tx_arg(cmd, "credentials::ids", get_field(jv, 'CredentialIDs'))
     if 'DeliverMax' in jv:
         raise Exception("unsupported DeliverMax " + jv)
-    if 'CredentialIDs' in jv:
-        raise Exception("unsupported CredentialIDs " + jv)
     do_cmd(cmd, jv)
 
 # currently supported SetFlag, ClearFlag, TransferRate, TickSize
@@ -545,11 +582,9 @@ def trustset(jv):
     quality_out = jv['QualityOut'] if 'QualityOut' in jv else None
     var = make_unique_var()
     cmd = f"trust({account}, {amount})"
-    print(f"\tauto {var} = env.json({cmd});")
-    if quality_in is not None:
-        print(f"\t{var}[\"QualityIn\"] = {quality_in};")
-    if quality_out is not None:
-        print(f"\t{var}[\"QualityOut\"] = {quality_out};")
+    var = env_json(cmd)
+    add_json(var, 'QualityIn', get_field(jv, 'QualityIn'))
+    add_json(var, 'QualityOut', get_field(jv, 'QualityOut'))
     do_cmd(var, jv)
 
 with open(payloads_file, "r") as f:
@@ -582,6 +617,15 @@ with open(payloads_file, "r") as f:
             case "AMMBid":
                 amm = AMM.get_AMM(jv = p)
                 amm.bid(p)
+            case "CredentialAccept":
+                cred = Credential()
+                cred.accept(p)
+            case "CredentialCreate":
+                cred = Credential()
+                cred.create(p)
+            case "CredentialDelete":
+                cred = Credential()
+                cred.delete(p)
             case "MPTokenIssuanceCreate":
                 mpt = MPT.get_MPT(p, create = True)
                 mpt.create(p)
@@ -594,8 +638,6 @@ with open(payloads_file, "r") as f:
             case "MPTokenIssuanceDestroy":
                 mpt = MPT.get_MPT(p)
                 mpt.destroy(p)
-            case "TrustSet":
-                trustset(p)
             case "OfferCreate":
                 offer = Offer.get_offer(p, create = True)
                 offer.create(p)
@@ -604,5 +646,7 @@ with open(payloads_file, "r") as f:
                 offer.cancel(p)
             case "Payment":
                 pay(p)
+            case "TrustSet":
+                trustset(p)
             case _:
                 raise Exception("unsupported tx type: " + p['TransactionType'])
