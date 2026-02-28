@@ -194,6 +194,25 @@ def get_paths(jv):
         paths_str = add_path(paths_str, f"path({path_str})")
     return paths_str
 
+"""
+"AuthorizeCredentials": [{
+    "Credential": {
+      "Issuer": "ra5nK24KXen9AHvsdFTKHSANinZseWnPcX",
+      "CredentialType": "6D795F63726564656E7469616C"
+    }
+  }],
+"""
+def get_credentials(jv, field):
+    if field in jv is None:
+        return None
+    credentials_str = ""
+    for credentials in jv[field]:
+        credential = credentials['Credential']
+        credential_str = f"{{{get_account_name(credential['Issuer'])}, {credential['CredentialType']}}}"
+        credentials_str = add_arg(credentials_str, "", credential_str)
+    credentials_str = f"{{{credentials_str}}}"
+    return credentials_str
+
 # add transaction argument
 def add_tx_arg(args, name, arg):
     if arg is None:
@@ -530,6 +549,22 @@ class Credential:
         cmd = f"credentials::deleteCred({account}, {subject}, {issuer}, {credential_type})"
         do_cmd(cmd, jv)
 
+def deposit_preauth(jv):
+    account = get_account_name(jv['Account'])
+    authorize = get_account_name(get_field(jv, 'Authorize'))
+    authorize_credentials = get_credentials(jv, 'AuthorizeCredentials')
+    unauthorize = get_account_name(get_field(jv, 'Unauthorize'))
+    unauthorize_credentials = get_credentials(jv, 'UnauthorizeCredentials')
+    if authorize is not None:
+        cmd = f"deposit::auth({account}, {authorize})"
+    elif unauthorize is not None:
+        cmd = f"deposit::unauth({account}, {unauthorize})"
+    elif authorize_credentials is not None:
+        cmd = f"deposit::authCredentials({account}, {{{authorize_credentials}}})"
+    elif unauthorize_credentials is not None:
+        cmd = f"deposit::unauthCredentials({account}, {{{unauthorize_credentials}}})"
+    do_cmd(cmd, jv)
+
 # pay transaction from Json Payment payload
 def pay(jv):
     account = get_account_name(jv['Account'], True)
@@ -626,6 +661,8 @@ with open(payloads_file, "r") as f:
             case "CredentialDelete":
                 cred = Credential()
                 cred.delete(p)
+            case "DepositPreauth":
+                deposit_preauth(p)
             case "MPTokenIssuanceCreate":
                 mpt = MPT.get_MPT(p, create = True)
                 mpt.create(p)
