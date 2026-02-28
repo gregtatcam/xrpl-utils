@@ -213,6 +213,25 @@ def get_credentials(jv, field):
     credentials_str = f"{{{credentials_str}}}"
     return credentials_str
 
+"""
+"Permissions": [
+        {
+            "Permission": {
+                "PermissionValue": "AccountDomainSet"
+            }
+        }
+    ],
+"""
+def get_permissions(jv):
+    if 'Permissions' not in jv:
+        raise Exception("missing Permissions in payload")
+    permissions_str = ""
+    for permissions in jv['Permissions']:
+        permission = permissions['Permission']
+        permissions_str = add_arg(permissions_str, "", permission['PermissionValue'])
+    permissions_str = f"{{{permissions_str}}}"
+    return permissions_str
+
 # add transaction argument
 def add_tx_arg(args, name, arg):
     if arg is None:
@@ -549,6 +568,34 @@ class Credential:
         cmd = f"credentials::deleteCred({account}, {subject}, {issuer}, {credential_type})"
         do_cmd(cmd, jv)
 
+# currently supported SetFlag, ClearFlag, TransferRate, TickSize
+def account_set(jv):
+    account = get_account_name(jv['Account'])
+    if 'SetFlag' in jv:
+        flags = jv['SetFlag']
+        do_cmd(f"fset({account}, {flags})")
+    elif 'ClearFlag' in jv:
+        flags = jv['ClearFlag']
+        do_cmd(f"fclear({account}, {flags})")
+    elif 'TransferRate' in jv:
+        rate = int(jv['TransferRate'])
+        do_cmd(f"rate({account}, {rate})")
+    elif 'TickSize' in jv:
+        tick_size = jv['TickSize']
+        var = make_unique_var()
+        print(f"\tauto {var} = noop({account});")
+        print(f"\t{var}[sfTickSize.fieldName] = {tick_size};")
+        do_cmd(var)
+    else:
+        raise Exception("unsupported account set : " + jv)
+
+
+def delegate_set(jv):
+    account = get_account_name(jv['Account'])
+    authorize = get_account_name(jv['Authorize'])
+    permissions = get_permissions(jv)
+    do_cmd(f"delegate::set({account}, {authorize}, {permissions})")
+
 def deposit_preauth(jv):
     account = get_account_name(jv['Account'])
     authorize = get_account_name(get_field(jv, 'Authorize'))
@@ -587,27 +634,6 @@ def pay(jv):
     if 'DeliverMax' in jv:
         raise Exception("unsupported DeliverMax " + jv)
     do_cmd(cmd, jv)
-
-# currently supported SetFlag, ClearFlag, TransferRate, TickSize
-def account_set(jv):
-    account = get_account_name(jv['Account'])
-    if 'SetFlag' in jv:
-        flags = jv['SetFlag']
-        do_cmd(f"fset({account}, {flags})")
-    elif 'ClearFlag' in jv:
-        flags = jv['ClearFlag']
-        do_cmd(f"fclear({account}, {flags})")
-    elif 'TransferRate' in jv:
-        rate = int(jv['TransferRate'])
-        do_cmd(f"rate({account}, {rate})")
-    elif 'TickSize' in jv:
-        tick_size = jv['TickSize']
-        var = make_unique_var()
-        print(f"\tauto {var} = noop({account});")
-        print(f"\t{var}[sfTickSize.fieldName] = {tick_size};")
-        do_cmd(var)
-    else:
-        raise Exception("unsupported account set : " + jv)
 
 # trustset transaction from Json TrustSet payload
 def trustset(jv):
@@ -661,6 +687,8 @@ with open(payloads_file, "r") as f:
             case "CredentialDelete":
                 cred = Credential()
                 cred.delete(p)
+            case "DelegateSet":
+                delegate_set(p)
             case "DepositPreauth":
                 deposit_preauth(p)
             case "MPTokenIssuanceCreate":
