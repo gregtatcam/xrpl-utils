@@ -213,6 +213,14 @@ def get_credentials(jv, field):
     credentials_str = f"{{{credentials_str}}}"
     return credentials_str
 
+def get_credential_ids(jv):
+    if 'CredetialIDs' not in jv:
+        return None
+    ids_str = ""
+    for id in jv['CredetialIDs']:
+        ids_str = add_arg(ids_str, "", id)
+    return f"{{{ids_str}}}"
+
 """
 "Permissions": [
         {
@@ -249,6 +257,12 @@ def cmd_from_arg(jv, cmd, arg, brackets = True):
     else:
         print(f"\tauto {var} = {cmd}({arg});")
     do_cmd(var, jv)
+
+
+def make_sequence(account):
+    var = make_unique_var()
+    print(f"\tauto {var} = env.seq({account});")
+    return var
 
 
 class AMM:
@@ -348,7 +362,159 @@ class AMM:
         arg = add_arg(arg, "authAccounts", authAccounts)
         assets = f"{{{self.asset}, {self.asset2}}}"
         arg = add_arg(arg, "assets", assets)
-        cmd_from_arg(jv, "AMM::bidJv", arg)
+        cmd_from_arg(jv, "AMM::bid", arg)
+
+class Check:
+    checks = defaultdict()
+    instances = defaultdict()
+    def __init__(self, check_id):
+        self.check_id = check_id
+
+    @staticmethod
+    def calculate_check_id(account, sequence):
+        # 1. Prefix for 'Check' space (0x0043)
+        check_space_key = bytes.fromhex("0043")
+        # 2. Convert an address to its 20-byte AccountID
+        account_id = decode_classic_address(account)
+        # 3. Convert sequence to 4-byte big-endian
+        sequence_bytes = sequence.to_bytes(4, byteorder='big')
+        # Concatenate and Hash
+        data = check_space_key + account_id + sequence_bytes
+        # SHA-512Half: Take the first 32 bytes (64 hex chars) of a SHA-512 hash
+        check_id = hashlib.sha512(data).hexdigest()[:64].upper()
+        return check_id
+
+    @staticmethod
+    def create_check_id(jv):
+        account = jv['Account']
+        sequence = jv['Sequence']
+        var = make_unique_var()
+        key = Check.calculate_check_id(account, sequence)
+        print(f"uint256 const {var}(getCheckIndex({account}, env.seq({account})));")
+        if key in Check.checks:
+            raise Exception("check already created: " + jv)
+        Check.checks[key] = var
+        return var
+
+    @staticmethod
+    def get_check(jv, create=False):
+        account = jv['Account']
+        sequence = jv['Sequence']
+        # check id from the payload
+        key = Check.calculate_check_id(account, sequence)
+        if create:
+            if key in Check.instances:
+                raise Exception("check already created: " + jv)
+            # check id in the unit-test
+            check_id = Check.create_check_id(jv)
+            Check.checks[key] = Check(check_id)
+        elif key not in Check.instances:
+            raise Exception("check does not exist: " + key)
+        return Check.instances[key]
+
+    def create(self, jv):
+        account = get_account_name(jv['Account'])
+        destination = get_account_name(jv['Destination'])
+        send_max = get_field(jv, 'Destinations')
+        cmd = f"check::create({account}, {destination}, {send_max})"
+        cmd = add_tx_arg(cmd, "dest_tag", get_field(jv, 'DestinationTag'))
+        cmd = add_tx_arg(cmd, "expiration", get_field(jv, 'Expiration'))
+        cmd = add_tx_arg(cmd, "invoice_id", get_field('InvoiceID'))
+        do_cmd(cmd, jv)
+
+    def cash(self, jv):
+        account = get_account_name(jv['Account'])
+        if 'Amount' in jv:
+            cmd = f"check::cash({account}, {self.check_id}, {get_amount(jv, 'Amount')})"
+        else:
+            cmd = f"check::cash({account}, {self.check_id}, DeliverMin({get_amount(jv, 'DeliverMin')}))"
+        do_cmd(cmd, jv)
+
+    def cancel(self, jv):
+        cmd = f"check::cancel({get_account_name(jv['Account'])}{self.check_id})"
+        do_cmd(cmd, jv)
+
+class Credential:
+    def __init__(self):
+        pass
+
+    def create(self, jv):
+        issuer = get_account_name(jv['Account'])
+        subject = get_account_name(jv['Subject'])
+        credential_type = get_field(jv, 'CredentialType')
+        cmd = f"cred::create({subject}, {issuer}, {credential_type})"
+        cmd = add_tx_arg(cmd, "credentials::uri", get_field(jv, 'URI'))
+        var = env_json(cmd)
+        add_json(var, "Expiration", get_field(jv, 'Expiration'))
+        do_cmd(var, jv)
+
+    def accept(self, jv):
+        subject = get_account_name(jv['Account'])
+        issuer = get_account_name(jv['Issuer'])
+        credential_type = get_field(jv, 'CredentialType')
+        cmd = f"cred::accept({subject}, {issuer}, {credential_type})"
+        do_cmd(cmd, jv)
+
+    def delete(self, jv):
+        account = get_account_name(jv['Account'])
+        credential_type = get_field(jv, 'CredentialType')
+        subject = get_account_name(get_field(jv, 'Subject'))
+        issuer = get_account_name(get_field(jv, 'Issuer'))
+        subject = subject if subject is not None else account
+        issuer = issuer if issuer is not None else account
+        cmd = f"credentials::deleteCred({account}, {subject}, {issuer}, {credential_type})"
+        do_cmd(cmd, jv)
+
+class Escrow:
+    escrows = defaultdict()
+    instances = defaultdict()
+
+    def __init__(self):
+        self.sequence = None
+
+    @staticmethod
+    def get_escrow(jv, create=False):
+        account = jv['Account']
+        if create:
+            sequence = jv['Sequence']
+            key = f"{account}, {sequence}"
+            if key in Escrow.escrows:
+                raise Exception("escrow already created: " + jv)
+            Escrow.instances[key] = Escrow()
+        else:
+            sequence = jv['OfferSequence']
+            key = f"{account}, {sequence}"
+            if key not in Escrow.escrows:
+                raise Exception("escrow does not exist: " + key)
+        return Escrow.instances[key]
+
+    def create(self, jv):
+        account = get_account_name(jv['Account'])
+        destination = get_account_name(jv['Destination'])
+        amount = get_amount(jv, 'Amount')
+        sequence = make_sequence(account)
+        self.sequence = sequence
+        cmd = f"escrow::create({account}, {destination}, {amount})"
+        cmd = add_tx_arg(cmd, "escrow::cancel_time", get_field(jv, 'CancelAfter'))
+        cmd = add_tx_arg(cmd, "escrow::finish_time", get_field(jv, 'FinishAfter'))
+        cmd = add_tx_arg(cmd, "escrow::condition", get_field(jv, 'Condition'))
+        cmd = add_tx_arg(cmd, "dtag", get_field(jv, 'DestinationTag'))
+        cmd = add_tx_arg(cmd, "escrow::fulfillment", get_field(jv, 'Fulfillment'))
+        do_cmd(cmd, jv)
+
+    def finish(self, jv):
+        account = get_account_name(jv['Account'])
+        owner = get_account_name(jv['Owner'])
+        cmd = f"escrow::finish({account}, {owner}, {self.sequence})"
+        cmd = add_tx_arg(cmd, "escrow::condition", get_field(jv, 'Condition'))
+        cmd = add_tx_arg(cmd, "credentials::ids", get_credentials(jv))
+        do_cmd(cmd, jv)
+
+    def cancel(self, jv):
+        account = get_account_name(jv['Account'])
+        owner = get_account_name(jv['Owner'])
+        cmd = f"escrow::cancel({account}, {owner}, {self.sequence})"
+        do_cmd(cmd, jv)
 
 class MPT:
     mpts = defaultdict()
@@ -467,107 +633,6 @@ class Offer:
         cmd = f"offer_cancel({account}, {seq})"
         do_cmd(cmd, jv)
 
-class Check:
-    checks = defaultdict()
-    instances = defaultdict()
-    def __init__(self, check_id):
-        self.check_id = check_id
-
-    @staticmethod
-    def calculate_check_id(account, sequence):
-        # 1. Prefix for 'Check' space (0x0043)
-        check_space_key = bytes.fromhex("0043")
-        # 2. Convert an address to its 20-byte AccountID
-        account_id = decode_classic_address(account)
-        # 3. Convert sequence to 4-byte big-endian
-        sequence_bytes = sequence.to_bytes(4, byteorder='big')
-        # Concatenate and Hash
-        data = check_space_key + account_id + sequence_bytes
-        # SHA-512Half: Take the first 32 bytes (64 hex chars) of a SHA-512 hash
-        check_id = hashlib.sha512(data).hexdigest()[:64].upper()
-        return check_id
-
-    @staticmethod
-    def create_check_id(jv):
-        account = jv['Account']
-        sequence = jv['Sequence']
-        var = make_unique_var()
-        key = Check.calculate_check_id(account, sequence)
-        print(f"uint256 const {var}(getCheckIndex({account}, env.seq({account})));")
-        if key in Check.checks:
-            raise Exception("check already created: " + jv)
-        Check.checks[key] = var
-        return var
-
-    @staticmethod
-    def get_check(jv, create=False):
-        account = jv['Account']
-        sequence = jv['Sequence']
-        # check id from the payload
-        key = Check.calculate_check_id(account, sequence)
-        if create:
-            if key in Check.instances:
-                raise Exception("check already created: " + jv)
-            # check id in the unit-test
-            check_id = Check.create_check_id(jv)
-            Check.checks[key] = Check(check_id)
-        elif key not in Check.instances:
-            raise Exception("check does not exist: " + key)
-        return Check.instances[key]
-
-    def create(self, jv):
-        account = get_account_name(jv['Account'])
-        destination = get_account_name(jv['Destination'])
-        send_max = get_field(jv, 'Destinations')
-        cmd = f"check::create({account}, {destination}, {send_max})"
-        cmd = add_tx_arg(cmd, "dest_tag", get_field(jv, 'DestinationTag'))
-        cmd = add_tx_arg(cmd, "expiration", get_field(jv, 'Expiration'))
-        cmd = add_tx_arg(cmd, "invoice_id", get_field('InvoiceID'))
-        do_cmd(cmd, jv)
-
-    def cash(self, jv):
-        account = get_account_name(jv['Account'])
-        if 'Amount' in jv:
-            cmd = f"check::cash({account}, {self.check_id}, {get_amount(jv, 'Amount')})"
-        else:
-            cmd = f"check::cash({account}, {self.check_id}, DeliverMin({get_amount(jv, 'DeliverMin')}))"
-        do_cmd(cmd, jv)
-
-    def cancel(self, jv):
-        cmd = f"check::cancel({get_account_name(jv['Account'])}{self.check_id})"
-        do_cmd(cmd, jv)
-
-class Credential:
-    def __init__(self):
-        pass
-
-    def create(self, jv):
-        issuer = get_account_name(jv['Account'])
-        subject = get_account_name(jv['Subject'])
-        credential_type = get_field(jv, 'CredentialType')
-        cmd = f"cred::create({subject}, {issuer}, {credential_type})"
-        cmd = add_tx_arg(cmd, "credentials::uri", get_field(jv, 'URI'))
-        var = env_json(cmd)
-        add_json(var, "Expiration", get_field(jv, 'Expiration'))
-        do_cmd(var, jv)
-
-    def accept(self, jv):
-        subject = get_account_name(jv['Account'])
-        issuer = get_account_name(jv['Issuer'])
-        credential_type = get_field(jv, 'CredentialType')
-        cmd = f"cred::accept({subject}, {issuer}, {credential_type})"
-        do_cmd(cmd, jv)
-
-    def delete(self, jv):
-        account = get_account_name(jv['Account'])
-        credential_type = get_field(jv, 'CredentialType')
-        subject = get_account_name(get_field(jv, 'Subject'))
-        issuer = get_account_name(get_field(jv, 'Issuer'))
-        subject = subject if subject is not None else account
-        issuer = issuer if issuer is not None else account
-        cmd = f"credentials::deleteCred({account}, {subject}, {issuer}, {credential_type})"
-        do_cmd(cmd, jv)
-
 # currently supported SetFlag, ClearFlag, TransferRate, TickSize
 def account_set(jv):
     account = get_account_name(jv['Account'])
@@ -595,6 +660,7 @@ def delegate_set(jv):
     authorize = get_account_name(jv['Authorize'])
     permissions = get_permissions(jv)
     do_cmd(f"delegate::set({account}, {authorize}, {permissions})")
+
 
 def deposit_preauth(jv):
     account = get_account_name(jv['Account'])
