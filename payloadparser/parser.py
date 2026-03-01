@@ -631,6 +631,16 @@ class Offer:
         cmd = f"offer_cancel({account}, {seq})"
         do_cmd(cmd, jv)
 
+def account_delete(jv):
+    account = get_account_name(jv['Account'])
+    dest = get_account_name(jv['Destination'])
+    dest_tag = get_field(jv, 'DestinationTag')
+    ids = get_credential_ids(jv)
+    cmd = f"acctdelete({account}, {dest})"
+    cmd = add_tx_arg(cmd, "dtag", dest_tag)
+    cmd = add_tx_arg(cmd, "credentials::ids", ids)
+    do_cmd(cmd, jv)
+
 # currently supported SetFlag, ClearFlag, TransferRate, TickSize
 def account_set(jv):
     account = get_account_name(jv['Account'])
@@ -719,6 +729,8 @@ with open(payloads_file, "r") as f:
         account = p['Account']
         # one transaction at a time
         match p['TransactionType']:
+            case "AccountDelete":
+                account_delete(p)
             case "AccountSet":
                 account_set(p)
             case "AMMCreate":
