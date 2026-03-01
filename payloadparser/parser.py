@@ -620,9 +620,7 @@ class Offer:
         account = get_account_name(jv['Account'])
         taker_pays = get_amount(jv, 'TakerPays')
         taker_gets = get_amount(jv, 'TakerGets')
-        var = make_unique_var()
-        print(f"\tauto {var} = env.seq({account});")
-        self.sequence = var
+        self.sequence = make_sequence(account)
         cmd = f"offer({account}, {taker_pays}, {taker_gets})"
         do_cmd(cmd, jv)
 
