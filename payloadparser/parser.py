@@ -767,6 +767,15 @@ with open(payloads_file, "r") as f:
                 delegate_set(p)
             case "DepositPreauth":
                 deposit_preauth(p)
+            case "EscrowCancel":
+                escrow = Escrow.get_escrow(p)
+                escrow.cancel(p)
+            case "EscrowCreate":
+                escrow = Escrow.get_escrow(p, create = True)
+                escrow.create(p)
+            case "EscrowFinish":
+                escrow = Escrow.get_escrow(p)
+                escrow.finish(p)
             case "MPTokenIssuanceCreate":
                 mpt = MPT.get_MPT(p, create = True)
                 mpt.create(p)
