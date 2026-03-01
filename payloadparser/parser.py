@@ -663,6 +663,17 @@ def account_set(jv):
         raise Exception("unsupported account set : " + jv)
 
 
+def clawback(jv):
+    account = get_account_name(jv['Account'])
+    amount = get_amount(jv, 'Amount')
+    holder = get_account_name(jv['Holder'])
+    if holder is not None:
+        cmd = f"claw({account}, {amount}, {holder})"
+    else:
+        cmd = f"claw({account}, {amount})"
+    do_cmd(cmd, jv)
+
+
 def delegate_set(jv):
     account = get_account_name(jv['Account'])
     authorize = get_account_name(jv['Authorize'])
@@ -754,6 +765,8 @@ with open(payloads_file, "r") as f:
             case "AMMBid":
                 amm = AMM.get_AMM(jv = p)
                 amm.bid(p)
+            case "Clawback":
+                clawback(p)
             case "CredentialAccept":
                 cred = Credential()
                 cred.accept(p)
