@@ -724,9 +724,6 @@ def pay(jv):
 def trustset(jv):
     account = get_account_name(jv['Account'])
     amount = get_amount(jv, 'LimitAmount')
-    quality_in = jv['QualityIn'] if 'QualityIn' in jv else None
-    quality_out = jv['QualityOut'] if 'QualityOut' in jv else None
-    var = make_unique_var()
     cmd = f"trust({account}, {amount})"
     var = env_json(cmd)
     add_json(var, 'QualityIn', get_field(jv, 'QualityIn'))
